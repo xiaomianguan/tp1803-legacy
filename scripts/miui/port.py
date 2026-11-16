@@ -147,6 +147,9 @@ for line in open(os.path.join(DEV, "system.prop")):
     if line and not line.startswith("#") and "=" in line:
         k, v = line.split("=", 1)
         props[k] = v
+# The Mi 5 has hardware navigation keys, the TP1803 doesn't: force the
+# on-screen navigation bar (overrides framework config_showNavigationBar)
+props["qemu.hw.mainkeys"] = "0"
 props["ro.product.board"] = "msmnile"
 props["ro.board.platform"] = "msmnile"
 bp = miui_cat("/build.prop").decode("utf-8", "replace").split("\n")
