@@ -1,0 +1,14 @@
+diff --git a/products/TP1803/pa.dependencies b/products/TP1803/pa.dependencies
+new file mode 100644
+index 0000000..313f2b2
+--- /dev/null
++++ b/products/TP1803/pa.dependencies
+@@ -0,0 +1,8 @@
++[
++    {
++        "remote":       "aospa",
++        "repository":   "android_frameworks_av",
++        "target_path":  "frameworks/av",
++        "revision":     "marshmallow-caf-8996"
++    }
++]

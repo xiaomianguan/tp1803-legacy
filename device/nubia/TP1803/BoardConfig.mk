@@ -31,6 +31,9 @@ TARGET_NO_RADIOIMAGE := true
 
 # Kernel (prebuilt from LineageOS TP1803)
 TARGET_PREBUILT_KERNEL := $(DEVICE_PATH)/prebuilt/Image.gz
+# AOSPA's build/core/tasks/kernel.mk installs $(TARGET_PREBUILT_INT_KERNEL),
+# which it only sets when building the kernel from source.
+TARGET_PREBUILT_INT_KERNEL := $(TARGET_PREBUILT_KERNEL)
 BOARD_KERNEL_BASE := 0x00000000
 BOARD_KERNEL_PAGESIZE := 4096
 BOARD_KERNEL_CMDLINE := \

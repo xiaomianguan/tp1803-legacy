@@ -13,10 +13,11 @@
 #   TF defaults to the newest target-files package of the build.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-SRC=$HOME/cm13-build/src
+export TP_SRC=${TP_SRC:-$HOME/aospa-build/src}
+SRC=$TP_SRC
 PRODUCT=$SRC/out/target/product/TP1803
 DIST=$SRC/out/dist-tp1803
-OUT="${1:-$DIST/cm-13.0-$(date +%Y%m%d)-TP1803.zip}"
+OUT="${1:-$DIST/pa-6.0.3-$(date +%Y%m%d)-TP1803.zip}"
 mkdir -p "$DIST"
 
 TF=${TF:-$(ls -t "$PRODUCT"/obj/PACKAGING/target_files_intermediates/*.zip | head -1)}
@@ -37,8 +38,8 @@ with zipfile.ZipFile(src) as zi, zipfile.ZipFile(dst, 'w', zipfile.ZIP_DEFLATED,
 EOF
 
 cd "$HOME/cm13-build"
-./enter.sh bash -c 'cd /src && source build/envsetup.sh >/dev/null && lunch cm_TP1803-userdebug >/dev/null 2>&1 &&
-  ./build/tools/releasetools/ota_from_target_files --block --backup=false --override_device=TP1803 \
+./enter.sh bash -c 'cd /src && source build/envsetup.sh >/dev/null && lunch pa_TP1803-userdebug >/dev/null 2>&1 &&
+  ./build/tools/releasetools/ota_from_target_files --block \
     -p out/host/linux-x86 -k build/target/product/security/testkey \
     out/dist-tp1803/target_files-bootv2.zip out/dist-tp1803/ota-unfixed.zip' | tail -3
 
@@ -56,9 +57,22 @@ with zipfile.ZipFile(src) as zi, zipfile.ZipFile(dst, 'w', zipfile.ZIP_DEFLATED,
             continue
         if info.filename == SCRIPT:
             lines = zi.read(info).decode().split("\n")
-            assert lines[0].startswith('assert(getprop("ro.product.device")'), lines[0]
-            lines[0] = CHECK
-            zo.writestr(info, "\n".join(lines))
+            out, swapped = [], False
+            for l in lines:
+                # Device check: CM's getprop() assert or AOSPA's
+                # get_device_compatible() -> recovery-side getprop check.
+                if l.startswith('assert(getprop("ro.product.device")') or \
+                        l.startswith('get_device_compatible('):
+                    out.append(CHECK)
+                    swapped = True
+                # AOSPA's downgrade check compares getprop("ro.build.date.utc"),
+                # which the updater can't read here either: drop it.
+                elif 'getprop("ro.build.date.utc")' in l:
+                    continue
+                else:
+                    out.append(l)
+            assert swapped, "no device check found in updater-script"
+            zo.writestr(info, "\n".join(out))
             continue
         with zi.open(info) as f, zo.open(info, 'w', force_zip64=True) as g:
             shutil.copyfileobj(f, g, 1 << 20)

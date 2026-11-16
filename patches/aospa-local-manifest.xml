@@ -1,0 +1,59 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- TP1803: fix AOSPA marshmallow-caf-release dead remotes.
+     codeaurora.org is gone: CAF projects come from CodeLinaro, at the manifest
+     tag where mirrored, else the newest Marshmallow 8x96 (LA.HB.1.3.x) ref.
+     vendor/head lived on the private git.aospa.co and is dropped. -->
+<manifest>
+  <remote name="clo" fetch="https://git.codelinaro.org/clo/la/" />
+  <remove-project name="android_vendor_head" />
+  <remove-project name="platform/bootable/recovery" />
+  <project path="bootable/recovery" name="platform/bootable/recovery" remote="clo" revision="refs/tags/LA.HB.1.3.2-23200-8x96.0" />
+  <remove-project name="platform/external/aac" />
+  <project path="external/aac" name="platform/external/aac" remote="clo" revision="refs/heads/caf_migration/LA.HB.1.3.1_rb1.15" />
+  <remove-project name="platform/external/android-clat" />
+  <project path="external/android-clat" name="platform/external/android-clat" remote="clo" revision="refs/heads/caf_migration/LA.HB.1.3.1_rb1.15" />
+  <remove-project name="platform/external/dhcpcd" />
+  <project path="external/dhcpcd" name="platform/external/dhcpcd" remote="clo" revision="refs/heads/caf_migration/LA.BF.1.1.3_rb1.12" />
+  <remove-project name="platform/external/iptables" />
+  <project path="external/iptables" name="platform/external/iptables" remote="clo" revision="refs/heads/caf_migration/LA.HB.1.3.1_rb1.15" />
+  <remove-project name="platform/external/libavc" />
+  <project path="external/libavc" name="platform/external/libavc" remote="clo" revision="refs/heads/caf_migration/LA.HB.1.3.1_rb1.15" />
+  <remove-project name="platform/external/libhevc" />
+  <project path="external/libhevc" name="platform/external/libhevc" remote="clo" revision="refs/heads/caf_migration/LA.HB.1.3.1_rb1.15" />
+  <remove-project name="platform/external/libmpeg2" />
+  <project path="external/libmpeg2" name="platform/external/libmpeg2" remote="clo" revision="refs/heads/caf_migration/LA.HB.1.3.1_rb1.15" />
+  <remove-project name="platform/external/libnetfilter_conntrack" />
+  <project path="external/libnetfilter_conntrack" name="platform/external/libnetfilter_conntrack" remote="clo" revision="refs/heads/caf_migration/LA.HB.1.3.1_rb1.15" />
+  <remove-project name="platform/external/libnfnetlink" />
+  <project path="external/libnfnetlink" name="platform/external/libnfnetlink" remote="clo" revision="refs/heads/caf_migration/LA.HB.1.3.1_rb1.15" />
+  <remove-project name="platform/frameworks/opt/bluetooth" />
+  <project path="frameworks/opt/bluetooth" name="platform/frameworks/opt/bluetooth" remote="clo" revision="refs/heads/caf_migration/LA.HB.1.3.1_rb1.15" />
+  <remove-project name="platform/frameworks/opt/net/ims" />
+  <project path="frameworks/opt/net/ims" name="platform/frameworks/opt/net/ims" remote="clo" revision="refs/heads/caf_migration/LA.HB.1.3.1_rb1.15" />
+  <remove-project name="platform/frameworks/opt/net/voip" />
+  <project path="frameworks/opt/net/voip" name="platform/frameworks/opt/net/voip" remote="clo" revision="refs/heads/caf_migration/LA.HB.1.3.1_rb1.15" />
+  <remove-project name="platform/frameworks/opt/net/wifi" />
+  <project path="frameworks/opt/net/wifi" name="platform/frameworks/opt/net/wifi" remote="clo" revision="refs/heads/caf_migration/LA.HB.1.3.1_rb1.15" />
+  <remove-project name="platform/hardware/libhardware_legacy" />
+  <project path="hardware/libhardware_legacy" name="platform/hardware/libhardware_legacy" remote="clo" revision="refs/heads/caf_migration/LA.HB.1.3.1_rb1.15" />
+  <remove-project name="platform/packages/apps/Bluetooth" />
+  <project path="packages/apps/Bluetooth" name="platform/packages/apps/Bluetooth" remote="clo" revision="refs/heads/caf_migration/LA.BF.1.1.3_rb1.12" />
+  <remove-project name="platform/packages/apps/InCallUI" />
+  <project path="packages/apps/InCallUI" name="platform/packages/apps/InCallUI" remote="clo" revision="refs/heads/caf_migration/LA.HB.1.3.1_rb1.15" />
+  <remove-project name="platform/packages/apps/PhoneCommon" />
+  <project path="packages/apps/PhoneCommon" name="platform/packages/apps/PhoneCommon" remote="clo" revision="refs/heads/caf_migration/LA.HB.1.3.1_rb1.15" />
+  <remove-project name="platform/packages/providers/TelephonyProvider" />
+  <project path="packages/providers/TelephonyProvider" name="platform/packages/providers/TelephonyProvider" remote="clo" revision="refs/heads/caf_migration/LA.HB.1.3.1_rb1.15" />
+  <remove-project name="platform/system/keymaster" />
+  <project path="system/keymaster" name="platform/system/keymaster" remote="clo" revision="refs/heads/caf_migration/LA.HB.1.3.1_rb1.15" />
+  <remove-project name="platform/system/qcom" />
+  <project path="system/qcom" name="platform/system/qcom" remote="clo" revision="refs/tags/LA.HB.1.3.2-10700-8x96.0" />
+  <remove-project name="platform/vendor/qcom-opensource/bluetooth" />
+  <project path="vendor/qcom/opensource/bluetooth" name="platform/vendor/qcom-opensource/bluetooth" remote="clo" revision="refs/tags/LA.HB.1.3.2-07200-8x96.0" />
+  <remove-project name="platform/vendor/qcom-opensource/dataservices" />
+  <project path="vendor/qcom/opensource/dataservices" name="platform/vendor/qcom-opensource/dataservices" remote="clo" revision="refs/tags/LA.HB.1.3.2-40600-8x96.0" />
+  <remove-project name="platform/vendor/qcom-opensource/fm" />
+  <project path="vendor/qcom/opensource/fm" name="platform/vendor/qcom-opensource/fm" remote="clo" revision="refs/tags/LA.HB.1.3.2-23200-8x96.0" />
+  <remove-project name="platform/vendor/qcom-opensource/time-services" />
+  <project path="vendor/qcom/opensource/time-services" name="platform/vendor/qcom-opensource/time-services" remote="clo" revision="refs/tags/LA.HB.1.3.2-23200-8x96.0" />
+</manifest>

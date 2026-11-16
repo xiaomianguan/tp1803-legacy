@@ -1,2 +1,2 @@
-add_lunch_combo cm_TP1803-userdebug
-add_lunch_combo cm_TP1803-eng
+add_lunch_combo pa_TP1803-userdebug
+add_lunch_combo pa_TP1803-eng

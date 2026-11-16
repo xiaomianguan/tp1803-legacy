@@ -3,7 +3,15 @@
 #
 
 $(call inherit-product, $(SRC_TARGET_DIR)/product/core_64_bit.mk)
-$(call inherit-product, frameworks/native/build/phone-xxxhdpi-4096-dalvik-heap.mk)
+# Dalvik heap for 6-8 GB phones (frameworks/native's phone-xxxhdpi-4096
+# config, which AOSPA's frameworks/native doesn't ship)
+PRODUCT_PROPERTY_OVERRIDES += \
+    dalvik.vm.heapstartsize=8m \
+    dalvik.vm.heapgrowthlimit=384m \
+    dalvik.vm.heapsize=1024m \
+    dalvik.vm.heaptargetutilization=0.75 \
+    dalvik.vm.heapminfree=4m \
+    dalvik.vm.heapmaxfree=16m
 
 LOCAL_PATH := device/nubia/TP1803
 
@@ -203,22 +211,20 @@ PRODUCT_COPY_FILES += \
         $(LOCAL_PATH)/prebuilt/qcom-daemons/$(b):system/bin/$(b)) \
     $(LOCAL_PATH)/proprietary/wlan/WCNSS_qcom_cfg.ini:system/vendor/firmware/wlan/qca_cld/WCNSS_qcom_cfg.ini
 
-# The complete CyanogenMod app set, including telephony/camera/FM/NFC apps that
-# have no working hardware backend yet.
+# Phone apps, including telephony/camera/FM/NFC apps that have no working
+# hardware backend yet. AOSPA equivalents of CM's apps: SnapdragonCamera
+# (CM: Snap). No FM app: CAF builds FM2 only with BOARD_HAVE_QCOM_FM.
 PRODUCT_PACKAGES += \
     Dialer \
     messaging \
     Stk \
     CellBroadcastReceiver \
     CarrierConfig \
-    Snap \
-    Camera2 \
-    FMRadio \
+    SnapdragonCamera \
     Nfc \
     Tag \
     SmartCardService \
-    BluetoothExt \
-    CMBugReport
+    BluetoothExt
 
 # Bring-up helpers
 PRODUCT_PACKAGES += \

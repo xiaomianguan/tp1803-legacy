@@ -57,7 +57,7 @@ index 0000000..dbb421f
 +    IPCThreadState::self()->joinThreadPool();
 +}
 diff --git a/include/media/stagefright/CameraSource.h b/include/media/stagefright/CameraSource.h
-index 3dcfe4e..07be8e8 100644
+index 527ee15..292b2ff 100644
 --- a/include/media/stagefright/CameraSource.h
 +++ b/include/media/stagefright/CameraSource.h
 @@ -24,6 +24,7 @@
@@ -79,10 +79,10 @@ index 3dcfe4e..07be8e8 100644
  
      int64_t mFirstFrameTimeUs;
 diff --git a/media/libstagefright/CameraSource.cpp b/media/libstagefright/CameraSource.cpp
-index f6b4741..1c801aa 100644
+index 27a6086..28a7995 100644
 --- a/media/libstagefright/CameraSource.cpp
 +++ b/media/libstagefright/CameraSource.cpp
-@@ -34,6 +34,7 @@
+@@ -32,6 +32,7 @@
  #include <gui/Surface.h>
  #include <utils/String8.h>
  #include <cutils/properties.h>
@@ -90,7 +90,7 @@ index f6b4741..1c801aa 100644
  
  #include <stagefright/AVExtensions.h>
  
-@@ -863,6 +864,28 @@ sp<MetaData> CameraSource::getFormat() {
+@@ -823,6 +824,28 @@ sp<MetaData> CameraSource::getFormat() {
      return mMeta;
  }
  
@@ -119,7 +119,7 @@ index f6b4741..1c801aa 100644
  void CameraSource::releaseOneRecordingFrame(const sp<IMemory>& frame) {
      releaseRecordingFrame(frame);
  }
-@@ -870,6 +893,26 @@ void CameraSource::releaseOneRecordingFrame(const sp<IMemory>& frame) {
+@@ -830,6 +853,26 @@ void CameraSource::releaseOneRecordingFrame(const sp<IMemory>& frame) {
  void CameraSource::signalBufferReturned(MediaBuffer *buffer) {
      ALOGV("signalBufferReturned: %p", buffer->data());
      Mutex::Autolock autoLock(mLock);
@@ -146,7 +146,7 @@ index f6b4741..1c801aa 100644
      for (List<sp<IMemory> >::iterator it = mFramesBeingEncoded.begin();
           it != mFramesBeingEncoded.end(); ++it) {
          if ((*it)->pointer() ==  buffer->data()) {
-@@ -927,7 +970,26 @@ status_t CameraSource::read(
+@@ -884,7 +927,26 @@ status_t CameraSource::read(
          frameTime = *mFrameTimes.begin();
          mFrameTimes.erase(mFrameTimes.begin());
          mFramesBeingEncoded.push_back(frame);
@@ -174,41 +174,21 @@ index f6b4741..1c801aa 100644
          (*buffer)->setObserver(this);
          (*buffer)->add_ref();
          (*buffer)->meta_data()->setInt64(kKeyTime, frameTime);
-@@ -1012,6 +1074,9 @@ bool CameraSource::isMetaDataStoredInVideoBuffers() const {
- }
- 
- void CameraSource::adjustIncomingANWBuffer(IMemory* data) {
-+    if (tpIsFdFrame(data)) {
-+        return;     /* TP1803: pixel data, not a VideoNativeMetadata */
-+    }
-     VideoNativeMetadata *payload =
-             reinterpret_cast<VideoNativeMetadata*>(data->pointer());
-     if (payload->eType == kMetadataBufferTypeANWBuffer) {
-@@ -1021,6 +1086,9 @@ void CameraSource::adjustIncomingANWBuffer(IMemory* data) {
- }
- 
- void CameraSource::adjustOutgoingANWBuffer(IMemory* data) {
-+    if (tpIsFdFrame(data)) {
-+        return;     /* TP1803: pixel data, not a VideoNativeMetadata */
-+    }
-     VideoNativeMetadata *payload =
-             reinterpret_cast<VideoNativeMetadata*>(data->pointer());
-     if (payload->eType == kMetadataBufferTypeANWBuffer) {
 diff --git a/media/mediaserver/main_mediaserver.cpp b/media/mediaserver/main_mediaserver.cpp
-index f785c0d..145bb5d 100644
+index 148dc0e..ff120ec 100644
 --- a/media/mediaserver/main_mediaserver.cpp
 +++ b/media/mediaserver/main_mediaserver.cpp
-@@ -142,7 +142,7 @@ int main(int argc __unused, char** argv)
+@@ -141,7 +141,7 @@ int main(int argc __unused, char** argv)
          AudioFlinger::instantiate();
          MediaPlayerService::instantiate();
          ResourceManagerService::instantiate();
 -        CameraService::instantiate();
 +        // CameraService runs in the 64-bit cameraserver process instead
- #ifdef AUDIO_LISTEN_ENABLED
-         ALOGI("ListenService instantiated");
-         ListenService::instantiate();
+         AudioPolicyService::instantiate();
+         SoundTriggerHwService::instantiate();
+         RadioService::instantiate();
 diff --git a/services/camera/libcameraservice/api1/client2/StreamingProcessor.cpp b/services/camera/libcameraservice/api1/client2/StreamingProcessor.cpp
-index 9e6c0db..bb02eec 100644
+index 66d7b00..8aa9a4d 100644
 --- a/services/camera/libcameraservice/api1/client2/StreamingProcessor.cpp
 +++ b/services/camera/libcameraservice/api1/client2/StreamingProcessor.cpp
 @@ -30,6 +30,8 @@
@@ -217,10 +197,10 @@ index 9e6c0db..bb02eec 100644
  #include <gui/Surface.h>
 +#include <binder/MemoryHeapBase.h>
 +#include <unistd.h>
- #include <camera/ICameraRecordingProxy.h>
  #include <media/hardware/HardwareAPI.h>
  
-@@ -280,6 +282,7 @@ status_t StreamingProcessor::setRecordingBufferCount(size_t count) {
+ #include "common/CameraDeviceBase.h"
+@@ -279,6 +281,7 @@ status_t StreamingProcessor::setRecordingBufferCount(size_t count) {
          mRecordingHeapFree = count;
  
          mRecordingConsumer.clear();
@@ -228,7 +208,7 @@ index 9e6c0db..bb02eec 100644
      }
  
      return OK;
-@@ -320,6 +323,7 @@ status_t StreamingProcessor::setRecordingFormat(int format,
+@@ -319,6 +322,7 @@ status_t StreamingProcessor::setRecordingFormat(int format,
          releaseAllRecordingFramesLocked();
  
          mRecordingConsumer.clear();
@@ -236,7 +216,7 @@ index 9e6c0db..bb02eec 100644
      }
  
      return OK;
-@@ -433,6 +437,7 @@ status_t StreamingProcessor::updateRecordingStream(const Parameters &params) {
+@@ -432,6 +436,7 @@ status_t StreamingProcessor::updateRecordingStream(const Parameters &params) {
                  mRecordingHeapCount + 1);
          mRecordingConsumer->setFrameAvailableListener(this);
          mRecordingConsumer->setName(String8("Camera2-RecordingConsumer"));
@@ -244,7 +224,7 @@ index 9e6c0db..bb02eec 100644
          mRecordingWindow = new Surface(producer);
          newConsumer = true;
          // Allocate memory later, since we don't know buffer size until receipt
-@@ -727,6 +732,7 @@ status_t StreamingProcessor::processRecordingFrame() {
+@@ -726,6 +731,7 @@ status_t StreamingProcessor::processRecordingFrame() {
      ATRACE_CALL();
      status_t res;
      sp<Camera2Heap> recordingHeap;
@@ -252,7 +232,7 @@ index 9e6c0db..bb02eec 100644
      size_t heapIdx = 0;
      nsecs_t timestamp;
  
-@@ -823,17 +829,34 @@ status_t StreamingProcessor::processRecordingFrame() {
+@@ -822,14 +828,34 @@ status_t StreamingProcessor::processRecordingFrame() {
                  mRecordingHeap->mBuffers[heapIdx]->getMemory(&offset,
                          &size);
  
@@ -260,9 +240,6 @@ index 9e6c0db..bb02eec 100644
 -            (uint8_t*)heap->getBase() + offset);
 -        payload->eType = kMetadataBufferTypeANWBuffer;
 -        payload->pBuffer = imgBuffer.mGraphicBuffer->getNativeBuffer();
--        // b/28466701
--        payload->pBuffer = (ANativeWindowBuffer*)((uint8_t*)payload->pBuffer -
--                ICameraRecordingProxy::getCommonBaseAddress());
 -        payload->nFenceFd = -1;
 -
 -        ALOGVV("%s: Camera %d: Sending out ANWBuffer %p",
@@ -298,7 +275,7 @@ index 9e6c0db..bb02eec 100644
  
          mRecordingBuffers.replaceAt(imgBuffer, heapIdx);
          recordingHeap = mRecordingHeap;
-@@ -843,8 +866,7 @@ status_t StreamingProcessor::processRecordingFrame() {
+@@ -839,8 +865,7 @@ status_t StreamingProcessor::processRecordingFrame() {
      Camera2Client::SharedCameraCallbacks::Lock l(client->mSharedCameraCallbacks);
      if (l.mRemoteCallback != 0) {
          l.mRemoteCallback->dataCallbackTimestamp(timestamp,
@@ -308,7 +285,7 @@ index 9e6c0db..bb02eec 100644
      } else {
          ALOGW("%s: Camera %d: Remote callback gone", __FUNCTION__, mId);
      }
-@@ -857,6 +879,32 @@ void StreamingProcessor::releaseRecordingFrame(const sp<IMemory>& mem) {
+@@ -853,6 +878,32 @@ void StreamingProcessor::releaseRecordingFrame(const sp<IMemory>& mem) {
      status_t res;
  
      Mutex::Autolock m(mMutex);

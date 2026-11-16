@@ -1,0 +1,30 @@
+diff --git a/services/surfaceflinger/DispSync.cpp b/services/surfaceflinger/DispSync.cpp
+index f32fc77..8c87bf8 100644
+--- a/services/surfaceflinger/DispSync.cpp
++++ b/services/surfaceflinger/DispSync.cpp
+@@ -508,6 +508,8 @@ void DispSync::setIgnorePresentFences(bool enable) {
+         mIgnorePresentFences = enable;
+         ALOGD("%s(%d)", __FUNCTION__, enable);
+     }
++#else
++    (void)enable;
+ #endif
+ }
+ 
+diff --git a/services/surfaceflinger/ExSurfaceFlinger/ExLayer.h b/services/surfaceflinger/ExSurfaceFlinger/ExLayer.h
+index 9d22b5f..708526b 100644
+--- a/services/surfaceflinger/ExSurfaceFlinger/ExLayer.h
++++ b/services/surfaceflinger/ExSurfaceFlinger/ExLayer.h
+@@ -89,11 +89,11 @@ private:
+     mutable Mesh mMeshLeftTop;
+     // The mesh used to draw the layer in GLES composition mode for s3d right/bottom
+     mutable Mesh mMeshRightBottom;
++#endif
+ 
+     virtual void drawWithOpenGL(const sp<const DisplayDevice>& hw, const Region& clip,
+             bool useIdentityTransform) const;
+ };
+-#endif
+ 
+ }; // namespace android
+ 

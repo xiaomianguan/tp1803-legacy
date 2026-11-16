@@ -1,12 +1,13 @@
 #!/bin/bash
 # Build the GApps variant zip: the vanilla build's target files + OpenGApps
 # 6.0 arm64 nano baked into /system (scripts/add-gapps.py), packaged by
-# scripts/mkota.sh as cm-13.0-YYYYMMDD-TP1803-gapps.zip.
+# scripts/mkota.sh as pa-6.0.3-YYYYMMDD-TP1803-gapps.zip.
 #
 # usage: scripts/mkgapps.sh [open_gapps-arm64-6.0-nano-*.zip]
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-SRC=$HOME/cm13-build/src
+export TP_SRC=${TP_SRC:-$HOME/aospa-build/src}
+SRC=$TP_SRC
 PRODUCT=$SRC/out/target/product/TP1803
 DIST=$SRC/out/dist-tp1803
 GAPPS="${1:-$(ls -t $HOME/cm13-build/gapps/open_gapps-arm64-6.0-nano-*.zip | head -1)}"
@@ -24,5 +25,5 @@ cd "$HOME/cm13-build"
 
 TF=$(ls -t "$PRODUCT"/obj/PACKAGING/target_files_intermediates/*.zip | head -1)
 python3 -I "$ROOT/scripts/add-gapps.py" "$TF" "$W/tars" "$W/pkg/g.prop" "$DIST/target_files-gapps.zip"
-TF="$DIST/target_files-gapps.zip" "$ROOT/scripts/mkota.sh" "$DIST/cm-13.0-$(date +%Y%m%d)-TP1803-gapps.zip"
+TF="$DIST/target_files-gapps.zip" "$ROOT/scripts/mkota.sh" "$DIST/pa-6.0.3-$(date +%Y%m%d)-TP1803-gapps.zip"
 clean; rm -f "$DIST/target_files-gapps.zip"

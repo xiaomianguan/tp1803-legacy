@@ -1,0 +1,21 @@
+diff --git a/tools/roomservice.py b/tools/roomservice.py
+index 7d5c338..b9f3443 100755
+--- a/tools/roomservice.py
++++ b/tools/roomservice.py
+@@ -67,6 +67,16 @@ if __name__ == '__main__':
+     except (IOError, ET.ParseError):
+         upstream_manifest = ET.Element('manifest')
+ 
++    # Newer repo versions write .repo/manifest.xml as a stub that only
++    # <include>s the real manifest; merge included files in.
++    for include in upstream_manifest.findall('include'):
++        try:
++            included = ET.parse(os.path.join('.repo/manifests', include.get('name'))).getroot()
++        except (IOError, ET.ParseError):
++            continue
++        for child in included:
++            upstream_manifest.append(child)
++
+     try:
+         roomservice_manifest = ET.parse(roomservice_manifest_path).getroot()
+     except (IOError, ET.ParseError):

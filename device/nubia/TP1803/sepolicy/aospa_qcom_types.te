@@ -1,0 +1,5 @@
+# Types that AOSPA's vendor/pa/sepolicy expects device/qcom/sepolicy to
+# define (we don't include the CAF policy; SELinux is disabled on 4.14).
+type iop_socket, file_type;
+type iop_data_file, file_type, data_file_type;
+type persist_file, file_type;

@@ -1,5 +1,5 @@
 #!/bin/bash
-# Repack CM13's ramdisk with Lineage's 4.14 kernel + dtb into a v2 boot image.
+# Repack the ROM ramdisk with Lineage's 4.14 kernel + dtb into a v2 boot image.
 # CM13's own mkbootimg can't write header v2 or a dtb section, which the
 # community abl on TP1803 needs. This uses the host's modern mkbootimg.
 #
@@ -8,7 +8,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 DEV="$ROOT/device/nubia/TP1803"
-OUT_DIR="${OUT_DIR:-$HOME/cm13-build/src/out/target/product/TP1803}"
+OUT_DIR="${OUT_DIR:-${TP_SRC:-$HOME/aospa-build/src}/out/target/product/TP1803}"
 RAMDISK="${1:-$OUT_DIR/ramdisk.img}"
 OUT="${2:-$OUT_DIR/boot-v2.img}"
 shift 2 2>/dev/null || true
