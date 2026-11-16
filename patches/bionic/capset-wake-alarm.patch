@@ -1,0 +1,43 @@
+diff --git a/libc/bionic/capset.cpp b/libc/bionic/capset.cpp
+new file mode 100644
+index 0000000..89c3b14
+--- /dev/null
++++ b/libc/bionic/capset.cpp
+@@ -0,0 +1,30 @@
++/*
++ * capset() wrapper (TP1803 port).
++ *
++ * Linux 4.x requires CAP_WAKE_ALARM to create CLOCK_REALTIME_ALARM /
++ * CLOCK_BOOTTIME_ALARM timerfds, which AlarmManagerService uses when there
++ * is no /dev/alarm. Android 6's zygote doesn't give system_server that
++ * capability, so AlarmManager falls back to a handler: no wakeup alarms and
++ * setTime() refuses to set the clock. Prebuilt frameworks (e.g. MIUI, whose
++ * zygote code is precompiled) can't be patched in Java, so add it here when
++ * zygote's child sets system_server's capabilities: uid 1000 (system) and
++ * CAP_SYS_TIME in the effective set, which only system_server gets.
++ */
++#include <linux/capability.h>
++#include <sys/capability.h>
++#include <unistd.h>
++
++extern "C" int ___capset(cap_user_header_t header, const cap_user_data_t data);
++
++int capset(cap_user_header_t header, const cap_user_data_t data) {
++  if (header != nullptr && data != nullptr && header->pid == 0 &&
++      header->version == _LINUX_CAPABILITY_VERSION_3 && getuid() == 1000 &&
++      (data[CAP_TO_INDEX(CAP_SYS_TIME)].effective & CAP_TO_MASK(CAP_SYS_TIME))) {
++    struct __user_cap_data_struct caps[_LINUX_CAPABILITY_U32S_3];
++    for (int i = 0; i < _LINUX_CAPABILITY_U32S_3; i++) caps[i] = data[i];
++    caps[CAP_TO_INDEX(CAP_WAKE_ALARM)].permitted |= CAP_TO_MASK(CAP_WAKE_ALARM);
++    caps[CAP_TO_INDEX(CAP_WAKE_ALARM)].effective |= CAP_TO_MASK(CAP_WAKE_ALARM);
++    if (___capset(header, caps) == 0) return 0;
++  }
++  return ___capset(header, data);
++}
+diff --git a/libc/Android.mk b/libc/Android.mk
+--- a/libc/Android.mk
++++ b/libc/Android.mk
+@@ -103,2 +103,3 @@
+     bionic/bionic_time_conversions.cpp \
++    bionic/capset.cpp \
+     bionic/brk.cpp \

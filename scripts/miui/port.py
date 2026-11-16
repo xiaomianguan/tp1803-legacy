@@ -104,7 +104,10 @@ for arch in ("lib", "lib64"):
         for f in os.listdir(d) if os.path.isdir(d) else []:
             if "mesa" in f or sub == "dri":
                 add("%s/%s/%s" % (arch, sub, f))
-    for f in ("libc.so", "libm.so", "libdl.so", "libutils.so", "libcutils.so", "libsync.so"):
+    # libaudioroute: ours skips mixer paths with controls the codec lacks
+    # (patches/system_media); MIUI's crashes mediaserver on them
+    for f in ("libc.so", "libm.so", "libdl.so", "libutils.so", "libcutils.so", "libsync.so",
+              "libaudioroute.so"):
         add("%s/%s" % (arch, f))
 for f in ("bin/linker", "bin/linker64", "bin/wpa_supplicant"):
     add(f)
@@ -119,6 +122,18 @@ for arch in ("lib", "lib64"):
                 removals.append("%s/%s" % (d, f))
     for f in miui_ls("/vendor/%s/egl" % arch):
         removals.append("vendor/%s/egl/%s" % (arch, f))
+# Mi 5 hardware this phone lacks. consumerir is fatal: ConsumerIrService
+# throws without an IR HAL and system_server never creates WindowManager.
+for f in ("android.hardware.consumerir.xml", "android.hardware.sensor.barometer.xml",
+          "android.hardware.sensor.stepcounter.xml", "android.hardware.sensor.stepdetector.xml",
+          "android.hardware.sensor.hifi_sensors.xml"):
+    removals.append("etc/permissions/" + f)
+# MIUI's flash_recovery would rewrite our recovery partition from boot
+removals += ["recovery-from-boot.p", "bin/install-recovery.sh"]
+# Mi 5 apps that hang without their Qualcomm daemons. com.qualcomm.location
+# (IZat, persistent, system uid) blocks on its location service -> ANR in
+# the system process.
+REMOVE_DIRS = ["priv-app/com.qualcomm.location"]
 print("removals: %d" % len(removals))
 
 # ---------------------------------------------------------------- build.prop
@@ -169,6 +184,20 @@ def is_exec(rel):
 
 for rel in removals:
     cmds.append("rm /%s" % rel)
+
+def remove_tree(rel):
+    for name in miui_ls("/" + rel):
+        child = "%s/%s" % (rel, name)
+        mode = subprocess.run(["debugfs", "-R", "stat /%s" % child, img], capture_output=True,
+                              text=True).stdout
+        if "Type: directory" in mode:
+            remove_tree(child)
+        else:
+            cmds.append("rm /%s" % child)
+    cmds.append("rmdir /%s" % rel)
+
+for rel in REMOVE_DIRS:
+    remove_tree(rel)
 for rel, src in sorted(payload.items()):
     d = os.path.dirname(rel)
     if d:
@@ -212,6 +241,10 @@ run("cpio", "-id", "--quiet", cwd=mrd, input=gzip.decompress(bootimg[roff:roff +
 for f in ("init.environ.rc", "init.miui.rc", "init.zygote64_32.rc", "init.zygote32.rc"):
     shutil.copy(os.path.join(mrd, f), os.path.join(rd, f))
 shutil.copy(os.path.join(mrd, "sbin/setlockstate"), os.path.join(rd, "sbin/setlockstate"))
+# healthd must match MIUI's framework: our 6.0.1 healthd sends maxChargingCurrent
+# in BatteryProperties, MIUI's 6.0.0 framework doesn't read it, so every field
+# shifts (level 1%, 414 C) and BatteryService shuts down for over-temperature.
+shutil.copy(os.path.join(mrd, "sbin/healthd"), os.path.join(rd, "sbin/healthd"))
 initrc = open(os.path.join(mrd, "init.rc")).read()
 # MIUI's init.rc is Android 6.0.0; our 6.0.1 init split load_all_props
 initrc = initrc.replace("    load_all_props\n", "    load_system_props\n    load_persist_props\n")
