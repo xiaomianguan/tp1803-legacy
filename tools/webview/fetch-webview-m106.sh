@@ -1,10 +1,11 @@
 #!/bin/bash
-# Replace CM13's prebuilt WebView (100.0.4896.127) with 106.0.5249.126, the last
-# Chromium milestone that supports Android 6.0 (M107 raised the minimum to API 24).
+# Replace the tree's prebuilt WebView (CM 13: 100.0.4896.127, AOSPA: 44) with
+# 106.0.5249.126, the last Chromium milestone that supports Android 6.0 (M107
+# raised the minimum to API 24). usage: SRC=<source tree> fetch-webview-m106.sh
 # APKs are LineageOS builds (com.android.webview, minSdk 23) from the
 # backup/main_20230314 branches of LineageOS/android_external_chromium-webview_prebuilt_{arm,arm64}.
 set -euo pipefail
-SRC=${SRC:-$HOME/cm13-build/src}
+SRC=${SRC:-$HOME/aospa-build/src}
 TMP=$(mktemp -d); trap 'rm -rf "$TMP"' EXIT
 fetch() { # arch commit sha256
   git init -q "$TMP/$1"

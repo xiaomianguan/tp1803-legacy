@@ -185,7 +185,9 @@ These are not tracked in git (`device/nubia/TP1803/proprietary/`,
 - **Daemons:** `tools/qcom-daemons/build.sh` (qrtr-ns, pd-mapper, rmtfs,
   tqftpserv, modem helpers) and `tools/hexagonrpc/build.sh` (FastRPC for
   the sensor and audio DSPs).
-- **WebView:** `tools/webview/fetch-webview-m106.sh`.
+- **WebView:** `tools/webview/fetch-webview-m106.sh` replaces the tree's prebuilt
+  WebView (AOSPA ships 44) with 106, the last version that supports Android 6.
+  The root CA additions are in `patches/libcore`.
 
 Several helpers use NDK r27d at
 `~/cm13-build/gpu/android-ndk-r27d`.

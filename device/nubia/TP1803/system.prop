@@ -2,3 +2,9 @@
 dalvik.vm.heapgrowthlimit=256m
 ro.config.low_ram=false
 wifi.interface=wlan0
+
+# WebView 106's 64-bit libwebviewchromium.so is 120 MB; zygote reserves
+# persist.sys.webview.vmsize (default 100 MB) for its RELRO and the framework
+# only recomputes it when WebView is updated as a package, not in the ROM.
+# 2x the library, as WebViewFactory computes it.
+persist.sys.webview.vmsize=251502592
