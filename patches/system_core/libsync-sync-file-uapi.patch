@@ -1,0 +1,158 @@
+diff --git a/libsync/sync.c b/libsync/sync.c
+index d73bb11..3db0f22 100644
+--- a/libsync/sync.c
++++ b/libsync/sync.c
+@@ -24,22 +24,89 @@
+ #include <linux/sync.h>
+ #include <linux/sw_sync.h>
+ 
++#include <errno.h>
++#include <poll.h>
+ #include <sys/ioctl.h>
+ #include <sys/stat.h>
+ #include <sys/types.h>
+ 
++/*
++ * Upstream sync_file UAPI (Linux 4.7+, include/uapi/linux/sync_file.h).
++ * Kernels with only this interface (e.g. 4.14) reject the legacy Android
++ * SYNC_IOC_* ioctls with ENOTTY; try the new ones first and fall back.
++ */
++struct sync_file_merge_data {
++    char name[32];
++    __s32 fd2;
++    __s32 fence;
++    __u32 flags;
++    __u32 pad;
++};
++
++struct sync_file_fence_info {
++    char obj_name[32];
++    char driver_name[32];
++    __s32 status;
++    __u32 flags;
++    __u64 timestamp_ns;
++};
++
++struct sync_file_info {
++    char name[32];
++    __s32 status;
++    __u32 flags;
++    __u32 num_fences;
++    __u32 pad;
++    __u64 sync_fence_info;
++};
++
++#define SYNC_FILE_IOC_MERGE     _IOWR('>', 3, struct sync_file_merge_data)
++#define SYNC_FILE_IOC_FILE_INFO _IOWR('>', 4, struct sync_file_info)
++
+ int sync_wait(int fd, int timeout)
+ {
+-    __s32 to = timeout;
++    /* poll() works for both legacy sync fences and sync_file fds */
++    struct pollfd fds;
++    int ret;
+ 
+-    return ioctl(fd, SYNC_IOC_WAIT, &to);
++    if (fd < 0) {
++        errno = EINVAL;
++        return -1;
++    }
++    fds.fd = fd;
++    fds.events = POLLIN;
++    do {
++        ret = poll(&fds, 1, timeout);
++        if (ret > 0) {
++            if (fds.revents & (POLLERR | POLLNVAL)) {
++                errno = EINVAL;
++                return -1;
++            }
++            return 0;
++        } else if (ret == 0) {
++            errno = ETIME;
++            return -1;
++        }
++    } while (ret == -1 && (errno == EINTR || errno == EAGAIN));
++
++    return ret;
+ }
+ 
+ int sync_merge(const char *name, int fd1, int fd2)
+ {
++    struct sync_file_merge_data fdata;
+     struct sync_merge_data data;
+     int err;
+ 
++    memset(&fdata, 0, sizeof(fdata));
++    fdata.fd2 = fd2;
++    strlcpy(fdata.name, name, sizeof(fdata.name));
++    err = ioctl(fd1, SYNC_FILE_IOC_MERGE, &fdata);
++    if (err >= 0)
++        return fdata.fence;
++    if (errno != ENOTTY)
++        return err;
++
+     data.fd2 = fd2;
+     strlcpy(data.name, name, sizeof(data.name));
+ 
+@@ -50,11 +117,61 @@ int sync_merge(const char *name, int fd1, int fd2)
+     return data.fence;
+ }
+ 
++/* sync_file: build the legacy sync_fence_info_data layout from FILE_INFO */
++static struct sync_fence_info_data *sync_file_info(int fd)
++{
++    struct sync_file_info finfo;
++    struct sync_file_fence_info *fences;
++    struct sync_fence_info_data *info;
++    struct sync_pt_info *pt;
++    size_t len;
++    __u32 i;
++
++    memset(&finfo, 0, sizeof(finfo));
++    if (ioctl(fd, SYNC_FILE_IOC_FILE_INFO, &finfo) < 0)
++        return NULL;
++
++    fences = calloc(finfo.num_fences ? finfo.num_fences : 1, sizeof(*fences));
++    if (fences == NULL)
++        return NULL;
++    if (finfo.num_fences) {
++        finfo.sync_fence_info = (__u64)(uintptr_t)fences;
++        if (ioctl(fd, SYNC_FILE_IOC_FILE_INFO, &finfo) < 0) {
++            free(fences);
++            return NULL;
++        }
++    }
++
++    len = sizeof(*info) + finfo.num_fences * sizeof(*pt);
++    info = calloc(1, len);
++    if (info == NULL) {
++        free(fences);
++        return NULL;
++    }
++    info->len = len;
++    strlcpy(info->name, finfo.name, sizeof(info->name));
++    info->status = finfo.status;
++    pt = (struct sync_pt_info *)info->pt_info;
++    for (i = 0; i < finfo.num_fences; i++, pt++) {
++        pt->len = sizeof(*pt);
++        strlcpy(pt->obj_name, fences[i].obj_name, sizeof(pt->obj_name));
++        strlcpy(pt->driver_name, fences[i].driver_name, sizeof(pt->driver_name));
++        pt->status = fences[i].status;
++        pt->timestamp_ns = fences[i].timestamp_ns;
++    }
++    free(fences);
++    return info;
++}
++
+ struct sync_fence_info_data *sync_fence_info(int fd)
+ {
+     struct sync_fence_info_data *info;
+     int err;
+ 
++    info = sync_file_info(fd);
++    if (info != NULL || errno != ENOTTY)
++        return info;
++
+     info = malloc(4096);
+     if (info == NULL)
+         return NULL;
