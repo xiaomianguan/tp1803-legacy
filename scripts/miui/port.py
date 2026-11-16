@@ -14,6 +14,8 @@ debugfs, keeping Xiaomi's ownership/permissions:
   - replaces bionic, libutils, libcutils, libsync with ours (supersets of
     MIUI's exports; needed by the CamX/Sunwave blobs and the sync_file fix)
     and wpa_supplicant (MIUI's needs Mi 5 vendor libs)
+  - binary-patches MIUI's libsurfaceflinger for GLES-only composition
+    (real blur without an HWC; no QCOM gralloc handle flag checks)
   - rewrites build.prop: msmnile board/platform and our device properties
 
 The ramdisk is our AOSPA userdebug ramdisk (MIUI's user-build init forces
@@ -105,12 +107,45 @@ for arch in ("lib", "lib64"):
             if "mesa" in f or sub == "dri":
                 add("%s/%s/%s" % (arch, sub, f))
     # libaudioroute: ours skips mixer paths with controls the codec lacks
-    # (patches/system_media); MIUI's crashes mediaserver on them
+    # (patches/system_media); MIUI's crashes mediaserver on them.
+    # libhardware_legacy: ours loads the built-in WLAN driver the 4.14 way and
+    # falls back to the vibrator HAL (patches/hardware_libhardware_legacy);
+    # MIUI's only adds read_wlan_mac_addr, used by nothing outside it.
     for f in ("libc.so", "libm.so", "libdl.so", "libutils.so", "libcutils.so", "libsync.so",
-              "libaudioroute.so"):
+              "libaudioroute.so", "libhardware_legacy.so"):
         add("%s/%s" % (arch, f))
 for f in ("bin/linker", "bin/linker64", "bin/wpa_supplicant"):
     add(f)
+
+# 4. MIUI's own SurfaceFlinger, binary-patched for a phone without a
+#    Qualcomm hwcomposer/gralloc (our display is GLES composition over KMS).
+#    The ELF maps file offset 0 at vaddr 0x13000; each word is checked first.
+SF_BASE = 0x13000
+SF_PATCHES = [
+    # setUpHWComposer returns right after hwc.initCheck() fails, before it
+    # computes whether a layer wants MIUI's real blur, so the shade and recents
+    # never blurred. Fall through to that computation (the work-list helpers
+    # are no-ops without an HWC)...
+    (0x33470, 0x35002da0, 0xd503201f),   # cbnz w0, <return>  -> nop
+    # ...and return before hwc.prepare(), which would dereference the missing HAL.
+    (0x33994, 0xaa1403e0, 0x14000024),   # mov x0, x20        -> b <return>
+]
+# CAF's ExLayer::isExtOnly/isIntOnly/isSecureDisplay/isYuvLayer read flag bits
+# at fixed offsets of a QCOM private_handle_t. Our gralloc's handle has another
+# layout, so random buffers (e.g. Settings' Wi-Fi password dialog) looked
+# "external only" and computeVisibleRegions dropped them. No external display
+# here: make all four return false.
+for va in (0x4e458, 0x4e4ac, 0x4e500, 0x4e554):
+    SF_PATCHES += [(va, 0xa9bf7bfd, 0x2a1f03e0),        # stp x29, x30 -> mov w0, wzr
+                   (va + 4, 0x910003fd, 0xd65f03c0)]    # mov x29, sp  -> ret
+sf = bytearray(miui_cat("/lib64/libsurfaceflinger.so"))
+for va, old, new in SF_PATCHES:
+    cur = struct.unpack_from("<I", sf, va - SF_BASE)[0]
+    if cur != old:
+        sys.exit("libsurfaceflinger: unexpected word %#x at %#x" % (cur, va))
+    struct.pack_into("<I", sf, va - SF_BASE, new)
+open(os.path.join(work, "libsurfaceflinger.so"), "wb").write(sf)
+payload["lib64/libsurfaceflinger.so"] = os.path.join(work, "libsurfaceflinger.so")
 print("payload: %d files" % len(payload))
 
 # ---------------------------------------------------------------- removals
@@ -126,7 +161,10 @@ for arch in ("lib", "lib64"):
 # throws without an IR HAL and system_server never creates WindowManager.
 for f in ("android.hardware.consumerir.xml", "android.hardware.sensor.barometer.xml",
           "android.hardware.sensor.stepcounter.xml", "android.hardware.sensor.stepdetector.xml",
-          "android.hardware.sensor.hifi_sensors.xml"):
+          "android.hardware.sensor.hifi_sensors.xml",
+          # Wi-Fi Direct makes the framework start "p2p_supplicant"; our init
+          # (like CM/AOSPA) runs a plain wpa_supplicant service
+          "android.hardware.wifi.direct.xml"):
     removals.append("etc/permissions/" + f)
 # MIUI's flash_recovery would rewrite our recovery partition from boot
 removals += ["recovery-from-boot.p", "bin/install-recovery.sh"]
