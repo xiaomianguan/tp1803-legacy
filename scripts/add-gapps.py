@@ -6,9 +6,9 @@ usage: add-gapps.py <target_files.zip> <opengapps tars dir> <g.prop> <out.zip>
 <opengapps tars dir> holds the extracted Core/GApps/Optional tarballs
 (one folder per package, e.g. gmscore-arm64/nodpi/priv-app/...). The
 package selection mirrors what the OpenGApps installer does for nano on a
-CM 13 phone at 420 dpi:
-  - all nano packages except setupwizardtablet (phone) and
-    packageinstallergoogle (skipped on CM < 14 by the installer)
+non-CM (AOSPA) phone at 420 dpi:
+  - all nano packages except setupwizardtablet (phone); Google's
+    PackageInstaller replaces the AOSP one (the installer only skips it on CM)
   - GmsCore: no 420 build, so the installer's rule picks nodpi
   - Provision removed (conflicts with Google SetupWizard)
   - swypelibs + LatinIME symlinks so the AOSP keyboard gets gesture typing
@@ -24,8 +24,9 @@ PACKAGES = [
     "setupwizarddefault-all/nodpi", "vending-arm64/nodpi",
     "calsync-all/nodpi", "dialerframework-common/common", "googletts-arm64/nodpi",
     "search-arm64/nodpi", "speech-common/common", "swypelibs-lib-arm64/common",
+    "packageinstallergoogle-all/nodpi",
 ]
-REMOVE = ("system/app/Provision",)
+REMOVE = ("system/app/Provision", "system/priv-app/PackageInstaller")
 SYMLINKS = {  # LatinIME uses the Google gesture-typing library
     "system/app/LatinIME/lib/arm64/libjni_latinime.so": "/system/lib64/libjni_latinimegoogle.so",
     "system/app/LatinIME/lib/arm64/libjni_keyboarddecoder.so": "/system/lib64/libjni_keyboarddecoder.so",
