@@ -1,0 +1,19 @@
+diff --git a/services/core/jni/com_android_server_AlarmManagerService.cpp b/services/core/jni/com_android_server_AlarmManagerService.cpp
+index 546e3e62..c84dffdb 100644
+--- a/services/core/jni/com_android_server_AlarmManagerService.cpp
++++ b/services/core/jni/com_android_server_AlarmManagerService.cpp
+@@ -393,6 +393,14 @@ static jlong init_timerfd()
+ 
+     for (size_t i = 0; i < N_ANDROID_TIMERFDS; i++) {
+         fds[i] = timerfd_create(android_alarm_to_clockid[i], 0);
++        if (fds[i] < 0 && errno == EINVAL &&
++                android_alarm_to_clockid[i] == CLOCK_POWEROFF_ALARM) {
++            /* CLOCK_POWEROFF_ALARM only exists in older Qualcomm kernels;
++             * without it the whole timerfd backend (and setTime) is lost.
++             * Treat power-off alarms as ordinary RTC wakeup alarms. */
++            ALOGW("CLOCK_POWEROFF_ALARM not supported, using CLOCK_REALTIME_ALARM");
++            fds[i] = timerfd_create(CLOCK_REALTIME_ALARM, 0);
++        }
+         if (fds[i] < 0) {
+             ALOGV("timerfd_create(%u) failed: %s",  android_alarm_to_clockid[i],
+                     strerror(errno));

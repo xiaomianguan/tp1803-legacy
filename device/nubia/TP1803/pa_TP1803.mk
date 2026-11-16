@@ -17,6 +17,12 @@ $(call inherit-product, $(SRC_TARGET_DIR)/product/aosp_base_telephony.mk)
 
 TARGET_BOOT_ANIMATION_RES := 1080
 
+# CAF's okhttp/apache-http implement com.quicinc.tcmiface.DpmTcmIface, which
+# device/qcom/common (not included, see above) puts on the boot classpath.
+# Without it dex2oat aborts building the boot image and zygote never starts.
+PRODUCT_PACKAGES += tcmiface
+PRODUCT_BOOT_JARS += tcmiface
+
 $(call inherit-product, device/nubia/TP1803/device.mk)
 
 include vendor/pa/main.mk

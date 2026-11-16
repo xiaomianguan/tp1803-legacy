@@ -2,7 +2,9 @@
 
 > **Branch `aospa-6`: work in progress.** This branch ports the device to
 > AOSPA's `marshmallow-caf-release` (PA 6.0.3, CAF base). It builds a
-> complete system image and flashable zip but has **not been booted yet**.
+> complete system image and flashable zip that **boots** (launcher, GPU,
+> LTE data, Wi-Fi, Bluetooth, sensors, cameras detected); calls, SMS,
+> audio, camera use and fingerprint are not tested on AOSPA yet.
 > The finished CyanogenMod 13 port is on the `cm-13` branch.
 
 An unofficial port of Paranoid Android 6 to the Nubia Mini 5G (TP1803,
