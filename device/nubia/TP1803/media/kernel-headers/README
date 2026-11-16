@@ -1,0 +1,4 @@
+UAPI headers from the running kernel (LineageOS android_kernel_nubia_sm8150
+5258bb2: include/uapi, drivers/staging/android/uapi/ion.h), with __user
+stripped. CM13's bionic carries pre-4.12 ION and pre-msm_vidc V4L2 headers,
+so the OMX components build against these instead.

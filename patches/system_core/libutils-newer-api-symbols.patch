@@ -1,0 +1,33 @@
+diff --git a/libutils/Android.mk b/libutils/Android.mk
+index 23a5c59..d81d1a3 100644
+--- a/libutils/Android.mk
++++ b/libutils/Android.mk
+@@ -31,6 +31,7 @@ commonSources:= \
+ 	StopWatch.cpp \
+ 	String8.cpp \
+ 	String16.cpp \
++	compat_newer_apis.cpp \
+ 	SystemClock.cpp \
+ 	Threads.cpp \
+ 	Timers.cpp \
+diff --git a/libutils/compat_newer_apis.cpp b/libutils/compat_newer_apis.cpp
+new file mode 100644
+index 0000000..dfb6bfb
+--- /dev/null
++++ b/libutils/compat_newer_apis.cpp
+@@ -0,0 +1,15 @@
++/* Symbols newer (Android 7+) prebuilt HALs expect from libutils. Kept out of
++ * String16.cpp: String16::size() is inline in this tree's header. */
++#include <utils/Log.h>
++#include <utils/SharedBuffer.h>
++
++namespace android {
++// Called by sp<> when it detects a racy assignment.
++void sp_report_race() { LOG_ALWAYS_FATAL("sp<> assignment detected data race"); }
++}
++
++// size_t String16::size() const (String16 holds one pointer, into a SharedBuffer)
++extern "C" size_t _ZNK7android8String164sizeEv(const char16_t* const* self)
++{
++    return android::SharedBuffer::sizeFromData(*self) / sizeof(char16_t) - 1;
++}

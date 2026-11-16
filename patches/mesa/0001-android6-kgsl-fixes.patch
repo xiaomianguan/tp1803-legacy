@@ -1,0 +1,255 @@
+diff --git a/src/android_stub/meson.build b/src/android_stub/meson.build
+index 0e3f27b..6097ae8 100644
+--- a/src/android_stub/meson.build
++++ b/src/android_stub/meson.build
+@@ -1,6 +1,6 @@
+ if with_android_stub
+   stub_libs = []
+-  lib_names = ['hardware', 'log', 'nativewindow', 'sync']
++  lib_names = ['cutils', 'hardware', 'log', 'nativewindow', 'sync']
+ 
+   if with_libbacktrace
+     lib_names += ['backtrace']
+diff --git a/src/egl/drivers/dri2/platform_android.c b/src/egl/drivers/dri2/platform_android.c
+index 0cbbfc1..65f02ac 100644
+--- a/src/egl/drivers/dri2/platform_android.c
++++ b/src/egl/drivers/dri2/platform_android.c
+@@ -36,7 +36,9 @@
+ #include <xf86drm.h>
+ #include <cutils/properties.h>
+ #include <drm-uapi/drm_fourcc.h>
++#if ANDROID_API_LEVEL >= 26
+ #include <sync/sync.h>
++#endif
+ #include <sys/types.h>
+ 
+ #include "util/compiler.h"
+@@ -1099,7 +1101,7 @@ droid_open_device(_EGLDisplay *disp, bool swrast)
+ {
+ #ifdef HAVE_FREEDRENO_KGSL
+    if (droid_open_device_kgsl(disp, swrast))
+-      goto done;
++      return EGL_TRUE;
+ #endif
+ #define MAX_DRM_DEVICES 64
+    struct dri2_egl_display *dri2_dpy = dri2_egl_display(disp);
+@@ -1210,16 +1212,10 @@ dri2_initialize_android(_EGLDisplay *disp)
+       goto cleanup;
+    }
+ 
+-   /* Only add a egl device if this is not the kgsl driver */
+-   if (strcmp(dri2_dpy->driver_name, "kgsl") != 0) {
+-      dev = _eglAddDevice(dri2_dpy->fd_render_gpu, false);
+-      if (!dev) {
+-         err = "DRI2: failed to find EGLDevice";
+-         goto cleanup;
+-      }
+-   }
+-
+-   if (!dri2_setup_device(disp, false)) {
++   /* KGSL has no DRM node to match an EGLDevice against: use the software
++    * device slot for it. */
++   if (!dri2_setup_device(disp, disp->Options.ForceSoftware ||
++                                strcmp(dri2_dpy->driver_name, "kgsl") == 0)) {
+       err = "DRI2: failed to setup EGLDevice";
+       goto cleanup;
+    }
+diff --git a/src/freedreno/drm/kgsl/kgsl_bo.c b/src/freedreno/drm/kgsl/kgsl_bo.c
+index 6e41245..3e2d1aa 100644
+--- a/src/freedreno/drm/kgsl/kgsl_bo.c
++++ b/src/freedreno/drm/kgsl/kgsl_bo.c
+@@ -1,4 +1,5 @@
+ #include "kgsl_priv.h"
++#include "util/simple_mtx.h"
+ #include "util/os_mman.h"
+ 
+ static uint64_t
+@@ -38,28 +39,85 @@ kgsl_bo_cpu_prep(struct fd_bo *bo, struct fd_pipe *pipe, uint32_t op)
+     return 0;
+ }
+ 
++/*
++ * KGSL frees a GPU object (and tears down its IOMMU mapping) as soon as it is
++ * freed, unlike msm GEM which keeps it alive while referenced by in-flight
++ * submits. Userspace fence bookkeeping can consider a BO idle slightly before
++ * the CCU has finished flushing into it, which showed up as "premature free"
++ * GPU page faults on window buffers. Defer every free until the most recently
++ * submitted timestamp retires instead.
++ */
++#define KGSL_MAX_TRACKED_CTX 8
++static simple_mtx_t submit_lock = SIMPLE_MTX_INITIALIZER;
++static struct { uint32_t ctx, ts; } last_submit[KGSL_MAX_TRACKED_CTX];
++static unsigned last_submit_count, last_submit_newest;
++
++void
++kgsl_note_submit(uint32_t context_id, uint32_t timestamp)
++{
++    simple_mtx_lock(&submit_lock);
++    unsigned i;
++    for (i = 0; i < last_submit_count; i++)
++        if (last_submit[i].ctx == context_id)
++            break;
++    if (i == last_submit_count) {
++        if (last_submit_count < KGSL_MAX_TRACKED_CTX)
++            last_submit_count++;
++        else
++            i = (last_submit_newest + 1) % KGSL_MAX_TRACKED_CTX;
++    }
++    last_submit[i].ctx = context_id;
++    last_submit[i].ts = timestamp;
++    last_submit_newest = i;
++    simple_mtx_unlock(&submit_lock);
++}
++
+ void
+ kgsl_bo_close_handle(struct fd_bo *bo)
+ {
+-    struct kgsl_gpumem_free_id req = {
+-        .id = bo->handle
+-    };
++    struct kgsl_gpu_event_timestamp ev = { 0 };
++    bool deferred = false;
++
++    simple_mtx_lock(&submit_lock);
++    for (unsigned i = 0; i < last_submit_count; i++) {
++        if (i == last_submit_newest)
++            continue;
++        /* Rare: other contexts in this process. Wait for them directly. */
++        struct kgsl_device_waittimestamp_ctxtid w = {
++            .context_id = last_submit[i].ctx,
++            .timestamp = last_submit[i].ts,
++            .timeout = 2000,
++        };
++        kgsl_pipe_safe_ioctl(bo->dev->fd, IOCTL_KGSL_DEVICE_WAITTIMESTAMP_CTXTID, &w);
++    }
++    if (last_submit_count) {
++        ev.context_id = last_submit[last_submit_newest].ctx;
++        ev.timestamp = last_submit[last_submit_newest].ts;
++        deferred = true;
++    }
++    simple_mtx_unlock(&submit_lock);
+ 
+-    kgsl_pipe_safe_ioctl(bo->dev->fd, IOCTL_KGSL_GPUMEM_FREE_ID, &req);
++    struct kgsl_gpuobj_free req = {
++        .id = bo->handle,
++    };
++    if (deferred) {
++        req.flags = KGSL_GPUOBJ_FREE_ON_EVENT;
++        req.type = KGSL_GPU_EVENT_TIMESTAMP;
++        req.priv = (uint64_t)(uintptr_t)&ev;
++        req.len = sizeof(ev);
++    }
++    if (kgsl_pipe_safe_ioctl(bo->dev->fd, IOCTL_KGSL_GPUOBJ_FREE, &req) && deferred) {
++        /* Context already gone or event rejected: plain free. */
++        struct kgsl_gpumem_free_id f = { .id = bo->handle };
++        kgsl_pipe_safe_ioctl(bo->dev->fd, IOCTL_KGSL_GPUMEM_FREE_ID, &f);
++    }
+ }
+ 
+ static void
+ kgsl_bo_destroy(struct fd_bo *bo)
+ {
+-    /* KGSL will immediately delete the BO when we close
+-     * the handle, so wait on all fences to ensure
+-     * the GPU is done using it before we destory it
+-     */
+-    for (uint32_t i = 0; i < bo->nr_fences; i++) {
+-        struct fd_pipe *pipe = bo->fences[i]->pipe;
+-        pipe->funcs->wait(pipe, bo->fences[i], ~0);
+-    }
+-
++    /* The GPU object itself is freed on a timestamp event (see
++     * kgsl_bo_close_handle), so there is no need to stall the CPU here. */
+     fd_bo_fini_common(bo);
+ }
+ 
+diff --git a/src/freedreno/drm/kgsl/kgsl_priv.h b/src/freedreno/drm/kgsl/kgsl_priv.h
+index ed65c95..f5310e6 100644
+--- a/src/freedreno/drm/kgsl/kgsl_priv.h
++++ b/src/freedreno/drm/kgsl/kgsl_priv.h
+@@ -30,6 +30,9 @@ FD_DEFINE_CAST(fd_pipe, kgsl_pipe);
+ struct fd_pipe *kgsl_pipe_new(struct fd_device *dev, enum fd_pipe_id id,
+                               uint32_t prio);
+ int kgsl_pipe_safe_ioctl(int fd, unsigned long request, void *arg);
++/* Track the most recent submitted timestamp per KGSL context so BO frees can
++ * be deferred until all previously submitted GPU work has retired. */
++void kgsl_note_submit(uint32_t context_id, uint32_t timestamp);
+ struct fd_submit *kgsl_submit_sp_new(struct fd_pipe *pipe);
+ 
+ struct kgsl_bo {
+diff --git a/src/freedreno/drm/kgsl/kgsl_ringbuffer_sp.c b/src/freedreno/drm/kgsl/kgsl_ringbuffer_sp.c
+index e8b2842..d700bcb 100644
+--- a/src/freedreno/drm/kgsl/kgsl_ringbuffer_sp.c
++++ b/src/freedreno/drm/kgsl/kgsl_ringbuffer_sp.c
+@@ -94,6 +94,7 @@ flush_submit_list(struct list_head *submit_list)
+     }
+ 
+     fd_submit->out_fence->kfence = req.timestamp;
++    kgsl_note_submit(kgsl_pipe->queue_id, req.timestamp);
+ 
+     if  (fd_submit->out_fence->use_fence_fd) {
+         int fd = timestamp_to_fd(pipe, req.timestamp);
+diff --git a/src/loader/loader.c b/src/loader/loader.c
+index db242b8..9f4a654 100644
+--- a/src/loader/loader.c
++++ b/src/loader/loader.c
+@@ -708,6 +708,20 @@ loader_get_driver_for_fd(int fd)
+     * user's problem, but this allows vc4 simulator to run on an i965 host,
+     * and may be useful for some touch testing of i915 on an i965 host.
+     */
++#ifdef HAVE_FREEDRENO_KGSL
++   /* A KGSL fd isn't a DRM device, so nothing below can identify it. */
++   {
++      char link[64], target[64];
++      snprintf(link, sizeof(link), "/proc/self/fd/%d", fd);
++      ssize_t n = readlink(link, target, sizeof(target) - 1);
++      if (n > 0) {
++         target[n] = '\0';
++         if (strstr(target, "/dev/kgsl"))
++            return strdup("kgsl");
++      }
++   }
++#endif
++
+    if (__normal_user()) {
+       const char *override = os_get_option("MESA_LOADER_DRIVER_OVERRIDE");
+       if (override)
+diff --git a/src/util/libsync.h b/src/util/libsync.h
+index 1515484..7aefe3f 100644
+--- a/src/util/libsync.h
++++ b/src/util/libsync.h
+@@ -44,7 +44,7 @@
+ extern "C" {
+ #endif
+ 
+-#if DETECT_OS_ANDROID
++#if DETECT_OS_ANDROID && __ANDROID_API__ >= 26
+ /* On Android, rely on the system's libsync instead of rolling our own
+  * sync_wait() and sync_merge().  This gives us compatibility with pre-4.7
+  * Android kernels.
+diff --git a/src/util/u_thread.c b/src/util/u_thread.c
+index 8c3ac22..89cc67f 100644
+--- a/src/util/u_thread.c
++++ b/src/util/u_thread.c
+@@ -174,7 +174,7 @@ util_thread_get_time_nano(thrd_t thread)
+ #endif
+ }
+ 
+-#if defined(HAVE_PTHREAD) && !defined(__APPLE__) && !defined(__HAIKU__)
++#if defined(HAVE_PTHREAD) && !defined(__APPLE__) && !defined(__HAIKU__) && !(defined(__ANDROID__) && __ANDROID_API__ < 24)
+ 
+ void util_barrier_init(util_barrier *barrier, unsigned count)
+ {
+diff --git a/src/util/u_thread.h b/src/util/u_thread.h
+index b5c7667..6e016ac 100644
+--- a/src/util/u_thread.h
++++ b/src/util/u_thread.h
+@@ -116,7 +116,7 @@ static inline bool u_thread_is_self(thrd_t thread)
+  * util_barrier
+  */
+ 
+-#if defined(HAVE_PTHREAD) && !defined(__APPLE__) && !defined(__HAIKU__)
++#if defined(HAVE_PTHREAD) && !defined(__APPLE__) && !defined(__HAIKU__) && !(defined(__ANDROID__) && __ANDROID_API__ < 24)
+ 
+ typedef pthread_barrier_t util_barrier;
+ 

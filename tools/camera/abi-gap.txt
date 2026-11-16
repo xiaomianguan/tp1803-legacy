@@ -1,0 +1,61 @@
+vendor libs in closure: 55
+  lib64/camera/com.qti.sensor.tp1803_imx586.so
+  lib64/camera/com.qti.sensor.tp1803_ov8856.so
+  lib64/camera/components/com.qti.camx.chiiqutils.so
+  lib64/camera/components/com.qti.eisv2.so
+  lib64/camera/components/com.qti.eisv3.so
+  lib64/camera/components/com.qti.hvx.addconstant.so
+  lib64/camera/components/com.qti.hvx.binning.so
+  lib64/camera/components/com.qti.node.depth.so
+  lib64/camera/components/com.qti.node.dummyrtb.so
+  lib64/camera/components/com.qti.node.dummysat.so
+  lib64/camera/components/com.qti.node.eisv2.so
+  lib64/camera/components/com.qti.node.eisv3.so
+  lib64/camera/components/com.qti.node.fcv.so
+  lib64/camera/components/com.qti.node.gpu.so
+  lib64/camera/components/com.qti.node.memcpy.so
+  lib64/camera/components/com.qti.node.remosaic.so
+  lib64/camera/components/com.qti.node.stich.so
+  lib64/camera/components/com.qti.node.swregistration.so
+  lib64/camera/components/com.qti.stats.aec.so
+  lib64/camera/components/com.qti.stats.aecwrapper.so
+  lib64/camera/components/com.qti.stats.af.so
+  lib64/camera/components/com.qti.stats.afd.so
+  lib64/camera/components/com.qti.stats.afwrapper.so
+  lib64/camera/components/com.qti.stats.asd.so
+  lib64/camera/components/com.qti.stats.awb.so
+  lib64/camera/components/com.qti.stats.awbwrapper.so
+  lib64/camera/components/com.qti.stats.haf.so
+  lib64/camera/components/com.qti.stats.hafoverride.so
+  lib64/camera/components/com.qti.stats.localhistogram.so
+  lib64/camera/components/com.qti.stats.pdlib.so
+  lib64/camera/components/com.qti.stats.pdlibsony.so
+  lib64/camera/components/com.qti.stats.pdlibwrapper.so
+  lib64/camera/components/com.qtistatic.stats.aec.so
+  lib64/camera/components/com.qtistatic.stats.af.so
+  lib64/camera/components/com.qtistatic.stats.awb.so
+  lib64/camera/components/com.qtistatic.stats.pdlib.so
+  lib64/camera/components/libdepthmapwrapper.so
+  lib64/hw/camera.qcom.so
+  lib64/hw/com.qti.chi.override.so
+  lib64/libc++-v28.so
+  lib64/libcamera_nn_stub.so
+  lib64/libcamxfdalgov7.so
+  lib64/libcamxfdalgov8.so
+  lib64/libcamxfdengine.so
+  lib64/libcamxstatscore.so
+  lib64/libcamxswprocessalgo.so
+  lib64/libcamxtintlessalgo.so
+  lib64/libcom.qti.chinodeutils.so
+  lib64/libcomparetf2_shim.so
+  lib64/libprotobuf-cpp-full.so
+  lib64/libqmi_cci.so
+  lib64/libqmi_common_so.so
+  lib64/libqmi_encdec.so
+  lib64/libsnsapi-v28.so
+  lib64/libthermalclient.so
+system libs used: libbacktrace.so libbase.so libc++.so libc.so libcamera_metadata.so libcutils.so libdl.so libhardware.so liblog.so libm.so libsync.so libunwind.so libutils.so libz.so
+
+MISSING LIBS:
+
+UNRESOLVED SYMBOLS: 0

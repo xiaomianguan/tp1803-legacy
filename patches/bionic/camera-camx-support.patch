@@ -1,0 +1,186 @@
+diff --git a/libc/Android.mk b/libc/Android.mk
+index f7f2adc09..42941d63c 100644
+--- a/libc/Android.mk
++++ b/libc/Android.mk
+@@ -77,6 +77,7 @@ libc_common_src_files += \
+     bionic/__pread64_chk.cpp \
+     bionic/__pread_chk.cpp \
+     bionic/__read_chk.cpp \
++    bionic/compat_newer_apis.cpp \
+     bionic/__readlink_chk.cpp \
+     bionic/__readlinkat_chk.cpp \
+     bionic/__recvfrom_chk.cpp \
+diff --git a/libc/bionic/compat_newer_apis.cpp b/libc/bionic/compat_newer_apis.cpp
+new file mode 100644
+index 000000000..0cadcc255
+--- /dev/null
++++ b/libc/bionic/compat_newer_apis.cpp
+@@ -0,0 +1,68 @@
++/*
++ * Functions newer (P/Q-era) prebuilt blobs import that Android 6's bionic
++ * lacks. Added for the TP1803 port's Qualcomm CamX camera HAL.
++ */
++#include <locale.h>
++#include <stdio.h>
++#include <stdlib.h>
++#include <unistd.h>
++
++#include "private/libc_logging.h"
++
++static bool mul_overflows(size_t a, size_t b, size_t* out) {
++  if (a != 0 && b > static_cast<size_t>(-1) / a) return true;
++  *out = a * b;
++  return false;
++}
++
++extern "C" size_t __fread_chk(void* buf, size_t size, size_t count, FILE* stream, size_t buf_size) {
++  size_t total;
++  if (mul_overflows(size, count, &total) || total > buf_size) {
++    __fortify_chk_fail("fread: prevented write past end of buffer", 0);
++  }
++  return fread(buf, size, count, stream);
++}
++
++extern "C" size_t __fwrite_chk(const void* buf, size_t size, size_t count, FILE* stream,
++                               size_t buf_size) {
++  size_t total;
++  if (mul_overflows(size, count, &total) || total > buf_size) {
++    __fortify_chk_fail("fwrite: prevented read past end of buffer", 0);
++  }
++  return fwrite(buf, size, count, stream);
++}
++
++extern "C" ssize_t __write_chk(int fd, const void* buf, size_t count, size_t buf_size) {
++  if (count > buf_size) {
++    __fortify_chk_fail("write: prevented read past end of buffer", 0);
++  }
++  return write(fd, buf, count);
++}
++
++extern "C" char* fgets_unlocked(char* buf, int n, FILE* stream) {
++  return fgets(buf, n, stream);
++}
++
++// Android 9 stdio additions used by the stock audio calibration blobs
++// (libacdbloader closure). M's stdio locks internally; the plain calls are
++// a correct (if slower) implementation of the unlocked variants.
++extern "C" int fgetc_unlocked(FILE* stream) {
++  return fgetc(stream);
++}
++
++extern "C" size_t fread_unlocked(void* buf, size_t size, size_t count, FILE* stream) {
++  return fread(buf, size, count, stream);
++}
++
++extern "C" size_t fwrite_unlocked(const void* buf, size_t size, size_t count, FILE* stream) {
++  return fwrite(buf, size, count, stream);
++}
++
++// Bionic only supports the C locale, so the _l variants ignore the locale.
++extern "C" double strtod_l(const char* s, char** end, locale_t) {
++  return strtod(s, end);
++}
++
++extern "C" float strtof_l(const char* s, char** end, locale_t) {
++  return strtof(s, end);
++}
+diff --git a/libc/libc.map b/libc/libc.map
+index 47c52a40f..6479f9e77 100644
+--- a/libc/libc.map
++++ b/libc/libc.map
+@@ -1454,3 +1454,25 @@ LIBC_PRIVATE {
+     SHA1Transform; # arm x86 mips
+     SHA1Update; # arm x86 mips
+ } LIBC;
++
++# TP1803: versions newer prebuilt blobs (CamX) bind to.
++LIBC_N {
++  global:
++    __fread_chk; # TP1803: newer blob compat (N)
++    __fwrite_chk;
++    __write_chk; # TP1803: newer blob compat (N)
++} LIBC;
++
++LIBC_O {
++  global:
++    strtod_l;
++    strtof_l;
++} LIBC_N;
++
++LIBC_P {
++  global:
++    fgetc_unlocked;
++    fgets_unlocked;
++    fread_unlocked;
++    fwrite_unlocked;
++} LIBC_O;
+diff --git a/linker/linker.cpp b/linker/linker.cpp
+index 99c02d810..438fd5f8d 100644
+--- a/linker/linker.cpp
++++ b/linker/linker.cpp
+@@ -2934,6 +2934,20 @@ bool soinfo::prelink_image() {
+         verneed_cnt_ = d->d_un.d_val;
+         break;
+ 
++      case 36:          // DT_RELR
++      case 0x6fffe000:  // DT_ANDROID_RELR
++        relr_ = reinterpret_cast<const ElfW(Addr)*>(load_bias + d->d_un.d_ptr);
++        break;
++
++      case 35:          // DT_RELRSZ
++      case 0x6fffe001:  // DT_ANDROID_RELRSZ
++        relr_count_ = d->d_un.d_val / sizeof(ElfW(Addr));
++        break;
++
++      case 37:          // DT_RELRENT
++      case 0x6fffe003:  // DT_ANDROID_RELRENT
++        break;
++
+       default:
+         if (!relocating_linker) {
+           DL_WARN("%s: unused DT entry: type %p arg %p", get_realpath(),
+@@ -3037,6 +3051,28 @@ bool soinfo::link_image(const soinfo_list_t& global_group, const soinfo_list_t&
+   }
+ #endif
+ 
++  if (relr_ != nullptr) {
++    // RELR: a bitmap encoding of R_*_RELATIVE relocations
++    const size_t word = sizeof(ElfW(Addr));
++    ElfW(Addr) base = 0;
++    for (size_t i = 0; i < relr_count_; ++i) {
++      ElfW(Addr) entry = relr_[i];
++      if ((entry & 1) == 0) {
++        *reinterpret_cast<ElfW(Addr)*>(load_bias + entry) += load_bias;
++        base = entry + word;
++        continue;
++      }
++      ElfW(Addr) offset = base;
++      while ((entry >>= 1) != 0) {
++        if (entry & 1) {
++          *reinterpret_cast<ElfW(Addr)*>(load_bias + offset) += load_bias;
++        }
++        offset += word;
++      }
++      base += (8 * word - 1) * word;
++    }
++  }
++
+   if (android_relocs_ != nullptr) {
+     // check signature
+     if (android_relocs_size_ > 3 &&
+diff --git a/linker/linker.h b/linker/linker.h
+index 023b6721f..bd9183694 100644
+--- a/linker/linker.h
++++ b/linker/linker.h
+@@ -397,6 +397,11 @@ struct soinfo {
+ 
+   uint32_t target_sdk_version_;
+ 
++  // RELR relative relocations (DT_RELR / DT_ANDROID_RELR, used by newer blobs).
++  // Kept last so the established layout above doesn't move.
++  const ElfW(Addr)* relr_;
++  size_t relr_count_;
++
+   friend soinfo* get_libdl_info();
+ };
+ 

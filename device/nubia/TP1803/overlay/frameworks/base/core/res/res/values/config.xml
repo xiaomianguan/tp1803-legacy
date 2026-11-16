@@ -1,0 +1,63 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Phone hardware: show dialer/messaging even before the RIL works -->
+    <bool name="config_voice_capable">true</bool>
+    <bool name="config_sms_capable">true</bool>
+    <!-- Backlight is 0..4095 in the kernel; the lights HAL scales 0..255 -->
+    <integer name="config_screenBrightnessSettingMinimum">5</integer>
+    <integer name="config_screenBrightnessDim">5</integer>
+    <bool name="config_automatic_brightness_available">true</bool>
+
+    <!-- Auto-brightness curve for the tmd2725 light sensor: lux thresholds and
+         the backlight level (0-255) used below/between/above them. -->
+    <integer-array name="config_autoBrightnessLevels">
+        <item>2</item>
+        <item>5</item>
+        <item>10</item>
+        <item>20</item>
+        <item>40</item>
+        <item>80</item>
+        <item>160</item>
+        <item>320</item>
+        <item>640</item>
+        <item>1280</item>
+        <item>2600</item>
+        <item>5000</item>
+        <item>10000</item>
+    </integer-array>
+    <integer-array name="config_autoBrightnessLcdBacklightValues">
+        <item>8</item>
+        <item>12</item>
+        <item>18</item>
+        <item>26</item>
+        <item>36</item>
+        <item>48</item>
+        <item>64</item>
+        <item>84</item>
+        <item>108</item>
+        <item>136</item>
+        <item>170</item>
+        <item>210</item>
+        <item>240</item>
+        <item>255</item>
+    </integer-array>
+    <bool name="config_unplugTurnsOnScreen">true</bool>
+    <bool name="config_showNavigationBar">true</bool>
+
+    <!-- The LRA needs ~70 ms of drive for a crisp click; replace the stock 1/21 ms pulse patterns. -->
+    <integer-array name="config_virtualKeyVibePattern">
+        <item>0</item>
+        <item>70</item>
+    </integer-array>
+    <integer-array name="config_longPressVibePattern">
+        <item>0</item>
+        <item>90</item>
+    </integer-array>
+    <integer-array name="config_keyboardTapVibePattern">
+        <item>60</item>
+    </integer-array>
+    <integer-array name="config_contextClickVibePattern">
+        <item>0</item>
+        <item>70</item>
+    </integer-array>
+</resources>

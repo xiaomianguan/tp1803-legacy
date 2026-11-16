@@ -1,0 +1,39 @@
+# Stock blobs and large prebuilts (see README: "Blobs and prebuilts")
+device/nubia/TP1803/prebuilt/mesa/
+device/nubia/TP1803/proprietary/
+
+# Build output
+device/nubia/TP1803/out/
+out/
+dist/
+tools/*/out/
+__pycache__/
+*.pyc
+
+# Reference checkouts (separate git repositories)
+ref/
+
+# Test programs built by tools/*/build.sh (sources are the .c files beside them)
+tools/audio/acdb-voice
+tools/audio/ctlset
+tools/audio/voice-test
+tools/bt/bt-init-test
+tools/camera/camx-capture
+tools/camera/camx-probe
+tools/camera/libmdtrace.so
+tools/fingerprint/fp-test
+tools/gltest/gltest
+tools/kmstest/kmstest
+tools/kmstest/kmstest_xb24
+tools/power/uevent-mon
+tools/ril/data-test
+tools/ril/qmi-online
+tools/ril/qmi-plmn
+tools/ril/qmi-probe
+tools/ril/qmi-sig
+tools/ril/sms-probe
+tools/sensors-test/sensors-test
+tools/ssc/ssc-dump
+tools/ssc/ssc-probe
+tools/ssc/ssc-test
+tools/vibrator/vib-test

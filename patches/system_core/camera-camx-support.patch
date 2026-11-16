@@ -1,0 +1,18 @@
+diff --git a/libcutils/trace-dev.c b/libcutils/trace-dev.c
+index a06987e..8ab3903 100644
+--- a/libcutils/trace-dev.c
++++ b/libcutils/trace-dev.c
+@@ -201,6 +201,13 @@ void atrace_begin_body(const char* name)
+ }
+ 
+ 
++/* Out-of-line end marker; newer blobs call it (N+ trace.h). */
++void atrace_end_body()
++{
++    char c = 'E';
++    write(atrace_marker_fd, &c, 1);
++}
++
+ void atrace_async_begin_body(const char* name, int32_t cookie)
+ {
+     char buf[ATRACE_MESSAGE_LENGTH];

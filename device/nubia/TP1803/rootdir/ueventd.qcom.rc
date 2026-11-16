@@ -1,0 +1,34 @@
+# TP1803 ueventd additions
+/dev/dri/card0            0666   system     graphics
+/dev/dri/renderD128       0666   system     graphics
+/dev/kgsl-3d0             0666   system     system
+/dev/ion                  0664   system     system
+/dev/ashmem               0666   root       root
+/dev/mtp_usb              0660   root       mtp
+/dev/usb_accessory        0660   root       usb
+/dev/wlan                 0660   wifi       wifi
+/dev/rtc0                 0640   system     system
+/dev/subsys_*             0640   system     system
+/dev/qseecom              0660   system     drmrpc
+/dev/adsprpc-smd          0664   system     system
+/dev/ipa                  0660   system     radio
+/dev/smd*                 0660   system     system
+/dev/uinput               0660   system     bluetooth
+
+# Camera (Spectra CAM KMD): opened by the CamX HAL in cameraserver
+/dev/video*               0660   system     camera
+/dev/v4l-subdev*          0660   system     camera
+# camera.tp1803 holds a CPU latency request while a camera is open
+/dev/cpu_dma_latency      0660   root       camera
+/dev/media*               0660   system     camera
+
+# Bluetooth: WCN399x power control and HCI UART (libbt-vendor runs in the
+# Bluetooth app, uid bluetooth)
+/dev/btpower              0660   bluetooth  bluetooth
+/dev/ttyHS0               0660   bluetooth  bluetooth
+
+# ACDB calibration loader (audio HAL in mediaserver)
+/dev/msm_audio_cal        0660   system     audio
+
+# Sunwave fingerprint sensor (stock HAL in fingerprintd)
+/dev/sunwave_fp           0660   system     system

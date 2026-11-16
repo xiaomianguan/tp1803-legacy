@@ -1,0 +1,366 @@
+diff --git a/camera/cameraserver/Android.mk b/camera/cameraserver/Android.mk
+new file mode 100644
+index 0000000..f3efa31
+--- /dev/null
++++ b/camera/cameraserver/Android.mk
+@@ -0,0 +1,18 @@
++LOCAL_PATH := $(call my-dir)
++
++include $(CLEAR_VARS)
++LOCAL_SRC_FILES := main_cameraserver.cpp
++LOCAL_SHARED_LIBRARIES := \
++    libcameraservice \
++    libcutils \
++    libutils \
++    libbinder \
++    liblog
++LOCAL_C_INCLUDES := \
++    frameworks/av/services/camera/libcameraservice \
++    system/media/camera/include \
++    system/media/private/camera/include
++LOCAL_MODULE := cameraserver
++LOCAL_MULTILIB := 64
++LOCAL_CFLAGS := -Wall -Wextra -Werror -Wno-unused-parameter
++include $(BUILD_EXECUTABLE)
+diff --git a/camera/cameraserver/main_cameraserver.cpp b/camera/cameraserver/main_cameraserver.cpp
+new file mode 100644
+index 0000000..dbb421f
+--- /dev/null
++++ b/camera/cameraserver/main_cameraserver.cpp
+@@ -0,0 +1,28 @@
++/*
++ * Standalone camera service (as split out of mediaserver in Android 7).
++ * Lets a 64-bit-only camera HAL run on Android 6, whose mediaserver is 32-bit.
++ */
++#define LOG_TAG "cameraserver"
++
++#include <signal.h>
++
++#include <binder/IPCThreadState.h>
++#include <binder/IServiceManager.h>
++#include <binder/ProcessState.h>
++#include <utils/Log.h>
++
++#include "CameraService.h"
++
++using namespace android;
++
++int main(int argc __unused, char** argv __unused)
++{
++    signal(SIGPIPE, SIG_IGN);
++
++    sp<ProcessState> proc(ProcessState::self());
++    sp<IServiceManager> sm = defaultServiceManager();
++    ALOGI("ServiceManager: %p", sm.get());
++    CameraService::instantiate();
++    ProcessState::self()->startThreadPool();
++    IPCThreadState::self()->joinThreadPool();
++}
+diff --git a/include/media/stagefright/CameraSource.h b/include/media/stagefright/CameraSource.h
+index 3dcfe4e..07be8e8 100644
+--- a/include/media/stagefright/CameraSource.h
++++ b/include/media/stagefright/CameraSource.h
+@@ -24,6 +24,7 @@
+ #include <camera/ICameraRecordingProxyListener.h>
+ #include <camera/CameraParameters.h>
+ #include <utils/List.h>
++#include <utils/KeyedVector.h>
+ #include <utils/RefBase.h>
+ #include <utils/String16.h>
+ 
+@@ -199,6 +200,9 @@ protected:
+     Condition mFrameCompleteCondition;
+     List<sp<IMemory> > mFramesReceived;
+     List<sp<IMemory> > mFramesBeingEncoded;
++    // TP1803: encoder metadata built for dma-buf backed frames (see
++    // CameraSource.cpp), mapped to the camera frame it describes.
++    KeyedVector<void *, sp<IMemory> > mTpFrameMeta;
+     List<int64_t> mFrameTimes;
+ 
+     int64_t mFirstFrameTimeUs;
+diff --git a/media/libstagefright/CameraSource.cpp b/media/libstagefright/CameraSource.cpp
+index f6b4741..1c801aa 100644
+--- a/media/libstagefright/CameraSource.cpp
++++ b/media/libstagefright/CameraSource.cpp
+@@ -34,6 +34,7 @@
+ #include <gui/Surface.h>
+ #include <utils/String8.h>
+ #include <cutils/properties.h>
++#include <cutils/native_handle.h>
+ 
+ #include <stagefright/AVExtensions.h>
+ 
+@@ -863,6 +864,28 @@ sp<MetaData> CameraSource::getFormat() {
+     return mMeta;
+ }
+ 
++
++/*
++ * TP1803: the camera service runs in a separate 64-bit cameraserver, which
++ * sends each recording frame as an IMemory over the frame's dma-buf (instead
++ * of a VideoNativeMetadata pointer that is meaningless in this process).
++ * Such frames are turned into the camera-source metadata the Qualcomm OMX
++ * encoder takes: a native handle {fd; offset, size, usage, timestamp,
++ * color format, index} (MetaBufferUtil layout, one frame).
++ */
++static const size_t kTpMinFrameBytes = 4096;
++static const int32_t kTpMetadataNativeHandle = 3;      /* kMetadataBufferTypeNativeHandleSource */
++static const int32_t kTpColorFormatNV12Venus = 0x7FA30C04;
++
++struct TpCamMeta {
++    int32_t eType;
++    native_handle_t *pHandle;
++};
++
++static bool tpIsFdFrame(IMemory *frame) {
++    return frame != NULL && frame->size() >= kTpMinFrameBytes;
++}
++
+ void CameraSource::releaseOneRecordingFrame(const sp<IMemory>& frame) {
+     releaseRecordingFrame(frame);
+ }
+@@ -870,6 +893,26 @@ void CameraSource::releaseOneRecordingFrame(const sp<IMemory>& frame) {
+ void CameraSource::signalBufferReturned(MediaBuffer *buffer) {
+     ALOGV("signalBufferReturned: %p", buffer->data());
+     Mutex::Autolock autoLock(mLock);
++    ssize_t metaIdx = mTpFrameMeta.indexOfKey(buffer->data());
++    if (metaIdx >= 0) {
++        sp<IMemory> frame = mTpFrameMeta.valueAt(metaIdx);
++        TpCamMeta *meta = (TpCamMeta *)mTpFrameMeta.keyAt(metaIdx);
++        mTpFrameMeta.removeItemsAt(metaIdx);
++        native_handle_delete(meta->pHandle);   /* fd belongs to the IMemory heap */
++        delete meta;
++        for (List<sp<IMemory> >::iterator it = mFramesBeingEncoded.begin();
++             it != mFramesBeingEncoded.end(); ++it) {
++            if (*it == frame) {
++                releaseOneRecordingFrame(frame);
++                mFramesBeingEncoded.erase(it);
++                ++mNumFramesEncoded;
++                buffer->setObserver(0);
++                buffer->release();
++                mFrameCompleteCondition.signal();
++                return;
++            }
++        }
++    }
+     for (List<sp<IMemory> >::iterator it = mFramesBeingEncoded.begin();
+          it != mFramesBeingEncoded.end(); ++it) {
+         if ((*it)->pointer() ==  buffer->data()) {
+@@ -927,7 +970,26 @@ status_t CameraSource::read(
+         frameTime = *mFrameTimes.begin();
+         mFrameTimes.erase(mFrameTimes.begin());
+         mFramesBeingEncoded.push_back(frame);
+-        *buffer = new MediaBuffer(frame->pointer(), frame->size());
++        if (tpIsFdFrame(frame.get())) {
++            ssize_t offset = 0;
++            size_t size = 0;
++            sp<IMemoryHeap> heap = frame->getMemory(&offset, &size);
++            native_handle_t *nh = native_handle_create(1, 6);
++            nh->data[0] = heap->getHeapID();          /* fd */
++            nh->data[1] = (int)offset;                 /* INT_OFFSET */
++            nh->data[2] = (int)size;                   /* INT_SIZE */
++            nh->data[3] = 0;                           /* INT_USAGE */
++            nh->data[4] = (int)(frameTime / 1000);     /* INT_TIMESTAMP (ms) */
++            nh->data[5] = kTpColorFormatNV12Venus;     /* INT_COLORFORMAT */
++            nh->data[6] = 0;                           /* INT_BUFINDEX */
++            TpCamMeta *meta = new TpCamMeta;
++            meta->eType = kTpMetadataNativeHandle;
++            meta->pHandle = nh;
++            mTpFrameMeta.add(meta, frame);
++            *buffer = new MediaBuffer(meta, sizeof(*meta));
++        } else {
++            *buffer = new MediaBuffer(frame->pointer(), frame->size());
++        }
+         (*buffer)->setObserver(this);
+         (*buffer)->add_ref();
+         (*buffer)->meta_data()->setInt64(kKeyTime, frameTime);
+@@ -1012,6 +1074,9 @@ bool CameraSource::isMetaDataStoredInVideoBuffers() const {
+ }
+ 
+ void CameraSource::adjustIncomingANWBuffer(IMemory* data) {
++    if (tpIsFdFrame(data)) {
++        return;     /* TP1803: pixel data, not a VideoNativeMetadata */
++    }
+     VideoNativeMetadata *payload =
+             reinterpret_cast<VideoNativeMetadata*>(data->pointer());
+     if (payload->eType == kMetadataBufferTypeANWBuffer) {
+@@ -1021,6 +1086,9 @@ void CameraSource::adjustIncomingANWBuffer(IMemory* data) {
+ }
+ 
+ void CameraSource::adjustOutgoingANWBuffer(IMemory* data) {
++    if (tpIsFdFrame(data)) {
++        return;     /* TP1803: pixel data, not a VideoNativeMetadata */
++    }
+     VideoNativeMetadata *payload =
+             reinterpret_cast<VideoNativeMetadata*>(data->pointer());
+     if (payload->eType == kMetadataBufferTypeANWBuffer) {
+diff --git a/media/mediaserver/main_mediaserver.cpp b/media/mediaserver/main_mediaserver.cpp
+index f785c0d..145bb5d 100644
+--- a/media/mediaserver/main_mediaserver.cpp
++++ b/media/mediaserver/main_mediaserver.cpp
+@@ -142,7 +142,7 @@ int main(int argc __unused, char** argv)
+         AudioFlinger::instantiate();
+         MediaPlayerService::instantiate();
+         ResourceManagerService::instantiate();
+-        CameraService::instantiate();
++        // CameraService runs in the 64-bit cameraserver process instead
+ #ifdef AUDIO_LISTEN_ENABLED
+         ALOGI("ListenService instantiated");
+         ListenService::instantiate();
+diff --git a/services/camera/libcameraservice/api1/client2/StreamingProcessor.cpp b/services/camera/libcameraservice/api1/client2/StreamingProcessor.cpp
+index 9e6c0db..bb02eec 100644
+--- a/services/camera/libcameraservice/api1/client2/StreamingProcessor.cpp
++++ b/services/camera/libcameraservice/api1/client2/StreamingProcessor.cpp
+@@ -30,6 +30,8 @@
+ #include <utils/Trace.h>
+ #include <gui/BufferItem.h>
+ #include <gui/Surface.h>
++#include <binder/MemoryHeapBase.h>
++#include <unistd.h>
+ #include <camera/ICameraRecordingProxy.h>
+ #include <media/hardware/HardwareAPI.h>
+ 
+@@ -280,6 +282,7 @@ status_t StreamingProcessor::setRecordingBufferCount(size_t count) {
+         mRecordingHeapFree = count;
+ 
+         mRecordingConsumer.clear();
++        mRecordingFdMem.clear();
+     }
+ 
+     return OK;
+@@ -320,6 +323,7 @@ status_t StreamingProcessor::setRecordingFormat(int format,
+         releaseAllRecordingFramesLocked();
+ 
+         mRecordingConsumer.clear();
++        mRecordingFdMem.clear();
+     }
+ 
+     return OK;
+@@ -433,6 +437,7 @@ status_t StreamingProcessor::updateRecordingStream(const Parameters &params) {
+                 mRecordingHeapCount + 1);
+         mRecordingConsumer->setFrameAvailableListener(this);
+         mRecordingConsumer->setName(String8("Camera2-RecordingConsumer"));
++        mRecordingFdMem.clear();
+         mRecordingWindow = new Surface(producer);
+         newConsumer = true;
+         // Allocate memory later, since we don't know buffer size until receipt
+@@ -727,6 +732,7 @@ status_t StreamingProcessor::processRecordingFrame() {
+     ATRACE_CALL();
+     status_t res;
+     sp<Camera2Heap> recordingHeap;
++    sp<IMemory> frameMem;
+     size_t heapIdx = 0;
+     nsecs_t timestamp;
+ 
+@@ -823,17 +829,34 @@ status_t StreamingProcessor::processRecordingFrame() {
+                 mRecordingHeap->mBuffers[heapIdx]->getMemory(&offset,
+                         &size);
+ 
+-        VideoNativeMetadata *payload = reinterpret_cast<VideoNativeMetadata*>(
+-            (uint8_t*)heap->getBase() + offset);
+-        payload->eType = kMetadataBufferTypeANWBuffer;
+-        payload->pBuffer = imgBuffer.mGraphicBuffer->getNativeBuffer();
+-        // b/28466701
+-        payload->pBuffer = (ANativeWindowBuffer*)((uint8_t*)payload->pBuffer -
+-                ICameraRecordingProxy::getCommonBaseAddress());
+-        payload->nFenceFd = -1;
+-
+-        ALOGVV("%s: Camera %d: Sending out ANWBuffer %p",
+-                __FUNCTION__, mId, payload->pBuffer);
++        (void)heap;
++        /*
++         * TP1803: the camera service runs in its own 64-bit cameraserver,
++         * so an ANativeWindowBuffer pointer would mean nothing to the
++         * encoder in the 32-bit mediaserver. Send the frame itself as an
++         * IMemory over the gralloc buffer's dma-buf fd instead; binder
++         * hands mediaserver a dup of the fd and CameraSource wraps it in
++         * camera-source metadata for the OMX encoder.
++         */
++        uint64_t bufId = imgBuffer.mGraphicBuffer->getId();
++        ssize_t memIdx = mRecordingFdMem.indexOfKey(bufId);
++        if (memIdx < 0) {
++            const native_handle_t *nh = imgBuffer.mGraphicBuffer->handle;
++            int fd = (nh && nh->numFds > 0) ? nh->data[0] : -1;
++            off_t bufSize = fd >= 0 ? lseek(fd, 0, SEEK_END) : -1;
++            if (bufSize <= 0) {
++                ALOGE("%s: Camera %d: Can't size recording buffer (fd %d)",
++                        __FUNCTION__, mId, fd);
++                mRecordingHeapHead = heapIdx;
++                mRecordingHeapFree++;
++                mRecordingConsumer->releaseBuffer(imgBuffer);
++                return NO_MEMORY;
++            }
++            sp<MemoryHeapBase> fdHeap = new MemoryHeapBase(fd, bufSize,
++                    MemoryHeapBase::DONT_MAP_LOCALLY, 0);
++            memIdx = mRecordingFdMem.add(bufId, new MemoryBase(fdHeap, 0, bufSize));
++        }
++        frameMem = mRecordingFdMem.valueAt(memIdx);
+ 
+         mRecordingBuffers.replaceAt(imgBuffer, heapIdx);
+         recordingHeap = mRecordingHeap;
+@@ -843,8 +866,7 @@ status_t StreamingProcessor::processRecordingFrame() {
+     Camera2Client::SharedCameraCallbacks::Lock l(client->mSharedCameraCallbacks);
+     if (l.mRemoteCallback != 0) {
+         l.mRemoteCallback->dataCallbackTimestamp(timestamp,
+-                CAMERA_MSG_VIDEO_FRAME,
+-                recordingHeap->mBuffers[heapIdx]);
++                CAMERA_MSG_VIDEO_FRAME, frameMem);
+     } else {
+         ALOGW("%s: Camera %d: Remote callback gone", __FUNCTION__, mId);
+     }
+@@ -857,6 +879,32 @@ void StreamingProcessor::releaseRecordingFrame(const sp<IMemory>& mem) {
+     status_t res;
+ 
+     Mutex::Autolock m(mMutex);
++
++    // TP1803: dma-buf backed frames (see processRecordingFrame)
++    for (size_t i = 0; i < mRecordingFdMem.size(); i++) {
++        if (IInterface::asBinder(mRecordingFdMem.valueAt(i)) != IInterface::asBinder(mem))
++            continue;
++        uint64_t bufId = mRecordingFdMem.keyAt(i);
++        for (size_t itemIndex = 0; itemIndex < mRecordingBuffers.size(); itemIndex++) {
++            const BufferItem &item = mRecordingBuffers[itemIndex];
++            if (item.mBuf == BufferItemConsumer::INVALID_BUFFER_SLOT ||
++                    item.mGraphicBuffer == 0 || item.mGraphicBuffer->getId() != bufId)
++                continue;
++            res = mRecordingConsumer->releaseBuffer(mRecordingBuffers[itemIndex]);
++            if (res != OK) {
++                ALOGE("%s: Camera %d: Unable to free recording frame: %s (%d)",
++                        __FUNCTION__, mId, strerror(-res), res);
++                return;
++            }
++            mRecordingBuffers.replaceAt(itemIndex);
++            mRecordingHeapFree++;
++            return;
++        }
++        ALOGE("%s: Camera %d: returned frame %" PRIu64 " is not outstanding",
++                __FUNCTION__, mId, bufId);
++        return;
++    }
++
+     // Make sure this is for the current heap
+     ssize_t offset;
+     size_t size;
+diff --git a/services/camera/libcameraservice/api1/client2/StreamingProcessor.h b/services/camera/libcameraservice/api1/client2/StreamingProcessor.h
+index e0cad3a..4861b56 100644
+--- a/services/camera/libcameraservice/api1/client2/StreamingProcessor.h
++++ b/services/camera/libcameraservice/api1/client2/StreamingProcessor.h
+@@ -20,6 +20,8 @@
+ #include <utils/Mutex.h>
+ #include <utils/String16.h>
+ #include <gui/BufferItemConsumer.h>
++#include <binder/MemoryBase.h>
++#include <utils/KeyedVector.h>
+ 
+ #include "camera/CameraMetadata.h"
+ 
+@@ -127,6 +129,9 @@ class StreamingProcessor:
+     static const size_t kDefaultRecordingHeapCount = 8;
+     size_t mRecordingHeapCount;
+     Vector<BufferItem> mRecordingBuffers;
++    // TP1803: recording frames go to the (separate) mediaserver as IMemory
++    // backed by each gralloc buffer's dma-buf fd, keyed by GraphicBuffer id.
++    KeyedVector<uint64_t, sp<MemoryBase> > mRecordingFdMem;
+     size_t mRecordingHeapHead, mRecordingHeapFree;
+ 
+     static const int kDefaultRecordingFormat =

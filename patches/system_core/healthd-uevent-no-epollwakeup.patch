@@ -1,0 +1,31 @@
+diff --git a/healthd/healthd.cpp b/healthd/healthd.cpp
+index 1489912..6f1cef2 100644
+--- a/healthd/healthd.cpp
++++ b/healthd/healthd.cpp
+@@ -267,9 +267,25 @@ static void uevent_init(void) {
+     }
+ 
+     fcntl(uevent_fd, F_SETFL, O_NONBLOCK);
+-    if (healthd_register_event(uevent_fd, uevent_event))
++    if (healthd_register_event(uevent_fd, uevent_event)) {
+         KLOG_ERROR(LOG_TAG,
+                    "register for uevent events failed\n");
++        return;
++    }
++
++    /*
++     * Watch uevents without EPOLLWAKEUP. With it, a uevent queued while
++     * healthd is frozen for suspend keeps the epoll wakeup source active
++     * and aborts the suspend; the msmnile 4.14 kernel emits backlight
++     * uevents from device suspend itself, so no suspend ever succeeded.
++     * Charger events still wake the system through the PMIC driver's own
++     * wakeup source, and are handled here after resume.
++     */
++    struct epoll_event ev;
++    ev.events = EPOLLIN;
++    ev.data.ptr = (void *)uevent_event;
++    if (epoll_ctl(epollfd, EPOLL_CTL_MOD, uevent_fd, &ev) == -1)
++        KLOG_ERROR(LOG_TAG, "uevent_init: epoll_ctl MOD failed; errno=%d\n", errno);
+ }
+ 
+ static void wakealarm_event(uint32_t /*epevents*/) {

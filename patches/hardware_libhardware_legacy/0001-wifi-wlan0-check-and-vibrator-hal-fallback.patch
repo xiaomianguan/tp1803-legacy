@@ -1,0 +1,102 @@
+diff --git a/Android.mk b/Android.mk
+index cb3b439..bbd9282 100644
+--- a/Android.mk
++++ b/Android.mk
+@@ -9,7 +9,7 @@ LEGACY_AUDIO_MAKEFILES := $(call all-named-subdir-makefiles,audio)
+ LOCAL_PATH:= $(call my-dir)
+ include $(CLEAR_VARS)
+ 
+-LOCAL_SHARED_LIBRARIES := libcutils liblog
++LOCAL_SHARED_LIBRARIES := libcutils liblog libhardware
+ 
+ LOCAL_INCLUDES += $(LOCAL_PATH)
+ 
+diff --git a/vibrator/vibrator.c b/vibrator/vibrator.c
+index f946ce1..bb60470 100644
+--- a/vibrator/vibrator.c
++++ b/vibrator/vibrator.c
+@@ -23,6 +23,41 @@
+ 
+ #define THE_DEVICE "/sys/class/timed_output/vibrator/enable"
+ 
++#include <pthread.h>
++#include <hardware/hardware.h>
++
++/* From <hardware/vibrator.h>, which can't be included here: it shares its
++ * include guard with <hardware_legacy/vibrator.h>. */
++#define LEGACY_VIBRATOR_MODULE_ID "vibrator"
++#define LEGACY_VIBRATOR_DEVICE_ID "main_vibrator"
++typedef struct legacy_vibrator_device {
++    struct hw_device_t common;
++    int (*vibrator_on)(struct legacy_vibrator_device *dev, unsigned int timeout_ms);
++    int (*vibrator_off)(struct legacy_vibrator_device *dev);
++} vibrator_device_t;
++
++/* Devices without timed_output (e.g. force-feedback haptics on newer
++ * kernels) provide a vibrator HAL module instead; fall back to it. */
++static vibrator_device_t *hal_dev;
++static pthread_once_t hal_once = PTHREAD_ONCE_INIT;
++
++static void hal_init(void)
++{
++    const hw_module_t *module;
++    if (access(THE_DEVICE, F_OK) == 0)
++        return;
++    if (hw_get_module(LEGACY_VIBRATOR_MODULE_ID, &module) == 0)
++        if (module->methods->open(module, LEGACY_VIBRATOR_DEVICE_ID,
++                                  (struct hw_device_t **)&hal_dev) != 0)
++            hal_dev = NULL;
++}
++
++static vibrator_device_t *hal(void)
++{
++    pthread_once(&hal_once, hal_init);
++    return hal_dev;
++}
++
+ int vibrator_exists()
+ {
+     int fd;
+@@ -35,7 +70,7 @@ int vibrator_exists()
+ 
+     fd = open(THE_DEVICE, O_RDWR);
+     if(fd < 0)
+-        return 0;
++        return hal() ? 1 : 0;
+     close(fd);
+     return 1;
+ }
+@@ -65,11 +100,15 @@ static int sendit(int timeout_ms)
+ 
+ int vibrator_on(int timeout_ms)
+ {
++    if (hal())
++        return hal()->vibrator_on(hal(), timeout_ms);
+     /* constant on, up to maximum allowed time */
+     return sendit(timeout_ms);
+ }
+ 
+ int vibrator_off()
+ {
++    if (hal())
++        return hal()->vibrator_off(hal());
+     return sendit(0);
+ }
+diff --git a/wifi/wifi.c b/wifi/wifi.c
+index 6f7e105..2e9beba 100644
+--- a/wifi/wifi.c
++++ b/wifi/wifi.c
+@@ -283,6 +283,13 @@ int wifi_change_driver_state(const char *state)
+ 
+ int is_wifi_driver_loaded() {
+     char driver_status[PROPERTY_VALUE_MAX];
++#ifdef WIFI_DRIVER_STATE_CTRL_PARAM
++    /* The built-in driver only counts as loaded once its interface exists:
++     * an ON written before the firmware was ready times out inside the
++     * driver, and must be retried rather than trusted. */
++    if (access("/sys/class/net/wlan0", F_OK) != 0)
++        return 0;
++#endif
+ #ifdef WIFI_DRIVER_MODULE_PATH
+     FILE *proc;
+     char line[sizeof(DRIVER_MODULE_TAG)+10];

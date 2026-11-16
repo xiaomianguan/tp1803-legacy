@@ -1,0 +1,152 @@
+diff --git a/hexagonrpcd/apps_std.c b/hexagonrpcd/apps_std.c
+index 7172bf0..e4b8f48 100644
+--- a/hexagonrpcd/apps_std.c
++++ b/hexagonrpcd/apps_std.c
+@@ -136,7 +136,7 @@ static uint32_t apps_std_fseek(void *data,
+ 	whence = apps_std_whence_table[first_in->whence];
+ 
+ 	ret = hexagonfs_lseek(ctx->fds, first_in->fd, first_in->pos, whence);
+-	if (ret) {
++	if (ret < 0) {
+ 		fprintf(stderr, "Could not seek stream: %s\n", strerror(-ret));
+ 		return AEE_EFAILED;
+ 	}
+@@ -150,6 +150,25 @@ static uint32_t apps_std_fseek(void *data,
+ 	return 0;
+ }
+ 
++static uint32_t apps_std_ftell(void *data,
++			       const struct fastrpc_io_buffer *inbufs,
++			       struct fastrpc_io_buffer *outbufs)
++{
++	struct apps_std_ctx *ctx = data;
++	const uint32_t *fd = inbufs[0].p;
++	uint32_t *pos = outbufs[0].p;
++	int ret;
++
++	ret = hexagonfs_lseek(ctx->fds, *fd, 0, SEEK_CUR);
++	if (ret < 0) {
++		fprintf(stderr, "Could not tell stream: %s\n", strerror(-ret));
++		return AEE_EFAILED;
++	}
++	*pos = ret;
++
++	return 0;
++}
++
+ static uint32_t apps_std_fopen_with_env(void *data,
+ 					const struct fastrpc_io_buffer *inbufs,
+ 					struct fastrpc_io_buffer *outbufs)
+@@ -423,7 +442,10 @@ static const struct fastrpc_function_impl apps_std_procs[] = {
+ 	{ .def = NULL, .impl = NULL, },
+ 	{ .def = NULL, .impl = NULL, },
+ 	{ .def = NULL, .impl = NULL, },
+-	{ .def = NULL, .impl = NULL, },
++	{
++		.def = &apps_std_ftell_def,
++		.impl = apps_std_ftell,
++	},
+ 	{
+ 		.def = &apps_std_fseek_def,
+ 		.impl = apps_std_fseek,
+diff --git a/hexagonrpcd/hexagonfs_mapped.c b/hexagonrpcd/hexagonfs_mapped.c
+index fd28c8c..7881ef5 100644
+--- a/hexagonrpcd/hexagonfs_mapped.c
++++ b/hexagonrpcd/hexagonfs_mapped.c
+@@ -176,7 +176,7 @@ static int mapped_seek(struct hexagonfs_fd *fd, off_t off, int whence)
+ 	if (ret == -1)
+ 		return -errno;
+ 
+-	return 0;
++	return ret;	/* new offset (used by ftell) */
+ }
+ 
+ static int mapped_stat(struct hexagonfs_fd *fd, struct stat *stats)
+diff --git a/hexagonrpcd/interface/apps_std.c b/hexagonrpcd/interface/apps_std.c
+index 67b3ace..d3dcd08 100644
+--- a/hexagonrpcd/interface/apps_std.c
++++ b/hexagonrpcd/interface/apps_std.c
+@@ -75,6 +75,19 @@ const struct hrpc_method_def_interp4 apps_std_fread_def = {
+ 	.inner_types = NULL,
+ };
+ 
++static struct hrpc_arg_def_interp4 apps_std_ftell_args[] = {
++	{ HRPC_ARG_WORD, sizeof(uint32_t) },
++	{ HRPC_ARG_OUT_BLOB, sizeof(uint32_t) },
++};
++
++const struct hrpc_method_def_interp4 apps_std_ftell_def = {
++	.msg_id = 8,
++	.n_args = HRPC_ARRAY_SIZE(apps_std_ftell_args),
++	.args = apps_std_ftell_args,
++	.n_inner_types = 0,
++	.inner_types = NULL,
++};
++
+ static struct hrpc_arg_def_interp4 apps_std_fseek_args[] = {
+ 	{ HRPC_ARG_WORD, sizeof(uint32_t) },
+ 	{ HRPC_ARG_WORD, sizeof(uint32_t) },
+diff --git a/hexagonrpcd/interface/apps_std.h b/hexagonrpcd/interface/apps_std.h
+index b80a1ca..63d0319 100644
+--- a/hexagonrpcd/interface/apps_std.h
++++ b/hexagonrpcd/interface/apps_std.h
+@@ -28,6 +28,7 @@ extern struct hrpc_method_def_interp4 apps_std_freopen_def;
+ extern struct hrpc_method_def_interp4 apps_std_fflush_def;
+ extern struct hrpc_method_def_interp4 apps_std_fclose_def;
+ extern struct hrpc_method_def_interp4 apps_std_fread_def;
++extern struct hrpc_method_def_interp4 apps_std_ftell_def;
+ extern struct hrpc_method_def_interp4 apps_std_fseek_def;
+ extern struct hrpc_method_def_interp4 apps_std_fopen_with_env_def;
+ extern struct hrpc_method_def_interp4 apps_std_opendir_def;
+diff --git a/hexagonrpcd/rpcd.c b/hexagonrpcd/rpcd.c
+index 600237b..517ad65 100644
+--- a/hexagonrpcd/rpcd.c
++++ b/hexagonrpcd/rpcd.c
+@@ -77,6 +77,7 @@ static void print_usage(const char *argv0)
+ 	       "\t-f DEVICE\tFastRPC device node to attach to\n"
+ 	       "\t-p PROGRAM\tRun client program with shared file descriptor\n"
+ 	       "\t-R DIR\t\tRoot directory of served files (default: /usr/share/qcom/)\n"
++	       "\t-a\t\tCreate the static audio PD (audiopd)\n"
+ 	       "\t-s\t\tAttach to sensorspd\n"
+ 	       "\t-h\t\tPrint help and exit\n");
+ }
+@@ -356,6 +357,7 @@ int main(int argc, char* argv[])
+ 	size_t n_progs = 0;
+ 	int fd, ret, opt;
+ 	bool attach_sns = false;
++	bool audio_pd = false;
+ 
+ 	progs = malloc(sizeof(const char *) * argc);
+ 	if (progs == NULL) {
+@@ -373,8 +375,11 @@ int main(int argc, char* argv[])
+ 	if (guessed_device_dir != NULL)
+ 		device_dir = guessed_device_dir;
+ 
+-	while ((opt = getopt(argc, argv, "c:d:f:p:R:sh")) != -1) {
++	while ((opt = getopt(argc, argv, "ac:d:f:p:R:sh")) != -1) {
+ 		switch (opt) {
++			case 'a':
++				audio_pd = true;
++				break;
+ 			case 'c':
+ 				create_shell = optarg;
+ 				break;
+@@ -417,7 +422,17 @@ int main(int argc, char* argv[])
+ 		goto err_free_pids;
+ 	}
+ 
+-	if (attach_sns)
++	if (audio_pd) {
++		/* static audio PD: the ADSP loads its dynamic AVS modules
++		 * (voice ECNS/fluence...) through this daemon */
++		static char name[] = "audiopd";
++		struct fastrpc_init_create_static st = {
++			.namelen = sizeof(name),
++			.memlen = 3 * 1024 * 1024,
++			.name = (__u64)(uintptr_t)name,
++		};
++		ret = ioctl(fd, FASTRPC_IOCTL_INIT_CREATE_STATIC, &st);
++	} else if (attach_sns)
+ 		ret = ioctl(fd, FASTRPC_IOCTL_INIT_ATTACH_SNS, NULL);
+ 	else if (create_shell != NULL)
+ 		ret = create_shell_pd(fd, create_shell);

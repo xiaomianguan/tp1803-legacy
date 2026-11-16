@@ -1,0 +1,341 @@
+# CM13 init for Nubia TP1803 (SM8150) running a 4.14 kernel
+
+import /init.qcom.usb.rc
+
+on early-init
+    # The 4.14 kernel only exposes binder through binderfs.
+    mkdir /dev/binderfs 0755 root root
+    mount binder binder /dev/binderfs stats=global
+    chmod 0666 /dev/binderfs/binder
+    chmod 0666 /dev/binderfs/hwbinder
+    chmod 0666 /dev/binderfs/vndbinder
+    symlink /dev/binderfs/binder /dev/binder
+    symlink /dev/binderfs/hwbinder /dev/hwbinder
+    symlink /dev/binderfs/vndbinder /dev/vndbinder
+
+    # Make kmsg readable for bring-up debugging
+    write /proc/sys/kernel/dmesg_restrict 0
+
+on init
+    symlink /dev/block/platform/soc/1d84000.ufshc /dev/block/bootdevice
+    mkdir /firmware 0771 system system
+    mkdir /dsp 0771 media media
+    mkdir /bt_firmware 0771 system system
+    mkdir /persist 0771 system system
+
+on fs
+    mount_all /fstab.qcom
+    swapon_all /fstab.qcom
+
+on early-boot
+    # IPA (packet accelerator) firmware, as the stock vendor init does
+    write /dev/ipa 1
+
+on post-fs-data
+    mkdir /data/vendor 0771 system system
+    mkdir /data/vendor/tmp 0770 root root
+    mkdir /data/vendor/camera 0770 media camera
+    # QRTR name service first: the other daemons register services with it
+    start qrtr-ns
+    mkdir /data/tombstones 0771 system system
+    mkdir /data/misc/wifi 0770 wifi wifi
+    mkdir /data/misc/wifi/sockets 0770 wifi wifi
+    mkdir /data/misc/dhcp 0770 dhcp dhcp
+    # Sunwave fingerprint: the stock HAL and its trustlet keep data here
+    mkdir /data/vendor_de 0771 system system
+    mkdir /data/vendor_de/0 0770 system system
+    mkdir /data/vendor_de/0/fpdata 0770 system system
+    mkdir /data/vendor_de/sunwave 0770 system system
+    # QSEE listeners (secure file system, RPMB, time) for trustlets
+    start qseecomd
+    setprop vold.post_fs_data_done 1
+
+on boot
+    # A crashing coprocessor must restart on its own, not panic the kernel
+    write /sys/bus/msm_subsys/devices/subsys0/restart_level related
+    write /sys/bus/msm_subsys/devices/subsys1/restart_level related
+    write /sys/bus/msm_subsys/devices/subsys2/restart_level related
+    write /sys/bus/msm_subsys/devices/subsys3/restart_level related
+    write /sys/bus/msm_subsys/devices/subsys4/restart_level related
+    write /sys/bus/msm_subsys/devices/subsys5/restart_level related
+    write /sys/bus/msm_subsys/devices/subsys6/restart_level related
+    write /sys/bus/msm_subsys/devices/subsys7/restart_level related
+    write /sys/bus/msm_subsys/devices/subsys8/restart_level related
+    write /sys/bus/msm_subsys/devices/subsys9/restart_level related
+    write /sys/bus/msm_subsys/devices/subsys10/restart_level related
+
+    # Modem support: EFS (rmtfs), protection-domain maps, modem file server,
+    # then power the modem (MPSS) on
+    start rmtfs
+    start pd-mapper
+    start tqftpserv
+    start modem-holder
+    # WLAN board data (BDF) download: what cnss-daemon does on stock
+    start wlfw-bdf
+    # External X50 modem: the WLAN clock comes through it
+    start mdm-boot
+
+    # Sensors: the SLPI loads its sensor registry/config over FastRPC at boot
+    # and publishes no sensors until hexagonrpcd answers. hexagonrpcd sees a
+    # small virtual tree; build its root here.
+    mkdir /dev/hexagonrpcd 0755 root root
+    mkdir /dev/hexagonrpcd/sensors 0755 root root
+    symlink /system/etc/sensors/config /dev/hexagonrpcd/sensors/config
+    symlink /system/etc/sensors/sns_reg_config /dev/hexagonrpcd/sensors/sns_reg.conf
+    symlink /persist/sensors/registry /dev/hexagonrpcd/sensors/registry
+    symlink /sys/devices/soc0 /dev/hexagonrpcd/socinfo
+    start hexagonrpcd-sdsp
+
+    # Audio: the ADSP's static audio PD loads its dynamic AVS modules (voice
+    # ECNS/fluence...) from /dsp over FastRPC; without them every voice call
+    # fails "topology commit" (silent calls). Must be up before the audio HAL
+    # sends voice topologies. Never stop it: the PD teardown hangs in-kernel.
+    mkdir /dev/hexagonrpcd-adsp 0755 root root
+    mkdir /dev/hexagonrpcd-adsp/dsp 0755 root root
+    symlink /dsp/adsp /dev/hexagonrpcd-adsp/dsp/adsp
+    symlink /system/vendor/etc/acdbdata /dev/hexagonrpcd-adsp/acdb
+    start hexagonrpcd-adsp
+
+    # Light/proximity (Nubia tmd2725 driver), driven by the sensors HAL
+    chown system system /sys/class/light/light/enable
+    chown system system /sys/class/light/light/delay
+    chown system system /sys/class/light/light/dev_init
+    chown system system /sys/class/proximity/proximity/enable
+    chown system system /sys/class/proximity/proximity/prox_init
+
+    # Wi-Fi control node (written by the Wi-Fi HAL as system)
+    chown wifi wifi /dev/wlan
+    chmod 0660 /dev/wlan
+
+    # Backlight (lights HAL runs as system)
+    chown system system /sys/class/backlight/panel0-backlight/brightness
+    chmod 0664 /sys/class/backlight/panel0-backlight/brightness
+    chown system system /sys/class/leds/red/brightness
+    chown system system /sys/class/leds/green/brightness
+    chown system system /sys/class/leds/blue/brightness
+
+    # Haptics
+    chown system system /sys/class/leds/vibrator/activate
+    chown system system /sys/class/leds/vibrator/duration
+
+    # Boot the DSPs (needed later for audio/sensors)
+    write /sys/kernel/boot_adsp/boot 1
+    write /sys/kernel/boot_cdsp/boot 1
+    write /sys/kernel/boot_slpi/boot 1
+
+    # CPU: keep the defaults the kernel picked; enable all cores
+    write /sys/devices/system/cpu/cpu4/online 1
+    write /sys/devices/system/cpu/cpu7/online 1
+
+# --- Qualcomm modem support (see tools/qcom-daemons) ---
+service qrtr-ns /system/bin/logwrapper /system/bin/qrtr-ns -f
+    class core
+    user root
+    disabled
+
+service rmtfs /system/bin/logwrapper /system/bin/rmtfs -P -o /dev/block/bootdevice/by-name
+    class core
+    user root
+    disabled
+
+service pd-mapper /system/bin/logwrapper /system/bin/pd-mapper
+    class core
+    user root
+    disabled
+
+service tqftpserv /system/bin/logwrapper /system/bin/tqftpserv
+    class core
+    user root
+    disabled
+
+# Holds /dev/subsys_modem open: keeps MPSS (and the WLAN PD) running
+service modem-holder /system/bin/modem-holder modem
+    class core
+    user root
+    disabled
+
+# Downloads bdwlan.bin to the WLAN firmware over QMI whenever WLFW appears
+service wlfw-bdf /system/bin/logwrapper /system/bin/wlfw-bdf
+    class core
+    user root
+    disabled
+
+# External X50 modem boot (esoc request engine + Sahara)
+
+# Camera service, split out of the 32-bit mediaserver (CamX is 64-bit only).
+# Recording frames reach mediaserver's encoder as dma-buf fds (see
+# patches/frameworks_av: StreamingProcessor / CameraSource).
+service cameraserver /system/bin/cameraserver
+    class main
+    # media: Android 6 only lets the media uid report camera app-ops
+    user media
+    group camera audio graphics input system drmrpc
+
+# FastRPC reverse tunnel serving the SLPI's sensors PD (tools/hexagonrpc)
+service hexagonrpcd-sdsp /system/bin/logwrapper /system/bin/hexagonrpcd -f /dev/fastrpc-sdsp -d sdsp -s -R /dev/hexagonrpcd
+    class core
+    user root
+    disabled
+
+# FastRPC reverse tunnel for the ADSP's static audio PD (stock: adsprpcd audiopd)
+service hexagonrpcd-adsp /system/bin/logwrapper /system/bin/hexagonrpcd -f /dev/fastrpc-adsp -d adsp -a -R /dev/hexagonrpcd-adsp
+    class core
+    user root
+    disabled
+
+# Stock QSEE listener daemon: trustlets (sw_fp) read/write files through it
+service qseecomd /system/vendor/bin/qseecomd
+    class core
+    user root
+    group root
+    disabled
+
+# Fingerprint daemon (Android 6) on our HAL 2.0 shim over the Sunwave HAL
+service fingerprintd /system/bin/fingerprintd
+    class late_start
+    user system
+    group system drmrpc input
+
+service mdm-boot /system/bin/mdm-boot
+    class core
+    user root
+    disabled
+    oneshot
+
+# --- Wi-Fi ---
+service wpa_supplicant /system/bin/wpa_supplicant \
+    -iwlan0 -Dnl80211 -c/data/misc/wifi/wpa_supplicant.conf \
+    -I/system/etc/wifi/wpa_supplicant_overlay.conf \
+    -O/data/misc/wifi/sockets \
+    -e/data/misc/wifi/entropy.bin -g@android:wpa_wlan0
+    class main
+    socket wpa_wlan0 dgram 660 wifi wifi
+    disabled
+    oneshot
+
+service dhcpcd_wlan0 /system/bin/dhcpcd -aABDKL
+    class main
+    disabled
+    oneshot
+
+service iprenew_wlan0 /system/bin/dhcpcd -n
+    class main
+    disabled
+    oneshot
+
+# Bring-up: snapshot dmesg/logcat to /cache every 2s so a crashed boot can be
+# read back from recovery (this kernel has no ramoops region).
+on post-fs
+    start bootlog
+
+service bootlog /system/bin/sh -c "mkdir -p /cache/bootlog; while true; do dmesg > /cache/bootlog/dmesg.txt; logcat -d -v threadtime > /cache/bootlog/logcat.txt 2>&1; ps > /cache/bootlog/ps.txt; sync; sleep 2; done"
+    user root
+    group root log
+    seclabel u:r:su:s0
+    oneshot
+    disabled
+
+on property:sys.boot_completed=1
+    write /proc/sys/vm/dirty_ratio 20
+    # bootlog is only for reading back boots that never complete; once boot
+    # completes it would wake the CPU and sync every 2 s forever.
+    stop bootlog
+
+    # --- Power: the stock msmnile tuning (Lineage init.target.rc /
+    # init.power.rc). Until this runs, the kernel defaults are the
+    # performance governor everywhere and lpm sleep_disabled=1 (cmdline).
+    write /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor schedutil
+    write /sys/devices/system/cpu/cpu0/cpufreq/schedutil/up_rate_limit_us 500
+    write /sys/devices/system/cpu/cpu0/cpufreq/schedutil/down_rate_limit_us 20000
+    write /sys/devices/system/cpu/cpu4/cpufreq/scaling_governor schedutil
+    write /sys/devices/system/cpu/cpu4/cpufreq/schedutil/up_rate_limit_us 500
+    write /sys/devices/system/cpu/cpu4/cpufreq/schedutil/down_rate_limit_us 20000
+    write /sys/devices/system/cpu/cpu7/cpufreq/scaling_governor schedutil
+    write /sys/devices/system/cpu/cpu7/cpufreq/schedutil/up_rate_limit_us 500
+    write /sys/devices/system/cpu/cpu7/cpufreq/schedutil/down_rate_limit_us 20000
+
+    # Enable EAS
+    write /proc/sys/kernel/sched_downmigrate_boosted 25
+    write /proc/sys/kernel/sched_upmigrate_boosted 25
+    write /proc/sys/kernel/sched_upmigrate 95
+    write /proc/sys/kernel/sched_downmigrate 85
+    write /proc/sys/kernel/sched_energy_aware 1
+    # Enable bus-dcvs
+    write /sys/devices/platform/soc/soc:qcom,cpu-cpu-llcc-bw/devfreq/soc:qcom,cpu-cpu-llcc-bw/governor bw_hwmon
+    write /sys/devices/platform/soc/soc:qcom,cpu-cpu-llcc-bw/devfreq/soc:qcom,cpu-cpu-llcc-bw/polling_interval 40
+    write /sys/devices/platform/soc/soc:qcom,cpu-cpu-llcc-bw/devfreq/soc:qcom,cpu-cpu-llcc-bw/bw_hwmon/mbps_zones "2288 4577 7110 9155 12298 14236 15258"
+    write /sys/devices/platform/soc/soc:qcom,cpu-cpu-llcc-bw/devfreq/soc:qcom,cpu-cpu-llcc-bw/bw_hwmon/sample_ms 4
+    write /sys/devices/platform/soc/soc:qcom,cpu-cpu-llcc-bw/devfreq/soc:qcom,cpu-cpu-llcc-bw/bw_hwmon/io_percent 50
+    write /sys/devices/platform/soc/soc:qcom,cpu-cpu-llcc-bw/devfreq/soc:qcom,cpu-cpu-llcc-bw/bw_hwmon/hist_memory 20
+    write /sys/devices/platform/soc/soc:qcom,cpu-cpu-llcc-bw/devfreq/soc:qcom,cpu-cpu-llcc-bw/bw_hwmon/hyst_length 10
+    write /sys/devices/platform/soc/soc:qcom,cpu-cpu-llcc-bw/devfreq/soc:qcom,cpu-cpu-llcc-bw/bw_hwmon/down_thres 30
+    write /sys/devices/platform/soc/soc:qcom,cpu-cpu-llcc-bw/devfreq/soc:qcom,cpu-cpu-llcc-bw/bw_hwmon/guard_band_mbps 0
+    write /sys/devices/platform/soc/soc:qcom,cpu-cpu-llcc-bw/devfreq/soc:qcom,cpu-cpu-llcc-bw/bw_hwmon/up_scale 250
+    write /sys/devices/platform/soc/soc:qcom,cpu-cpu-llcc-bw/devfreq/soc:qcom,cpu-cpu-llcc-bw/bw_hwmon/idle_mbps 1600
+    write /sys/devices/platform/soc/soc:qcom,cpu-cpu-llcc-bw/devfreq/soc:qcom,cpu-cpu-llcc-bw/max_freq 14236
+    write /sys/devices/platform/soc/soc:qcom,cpu-llcc-ddr-bw/devfreq/soc:qcom,cpu-llcc-ddr-bw/governor bw_hwmon
+    write /sys/devices/platform/soc/soc:qcom,cpu-llcc-ddr-bw/devfreq/soc:qcom,cpu-llcc-ddr-bw/polling_interval 40
+    write /sys/devices/platform/soc/soc:qcom,cpu-llcc-ddr-bw/devfreq/soc:qcom,cpu-llcc-ddr-bw/bw_hwmon/mbps_zones "1720 2929 3879 5931 6881 7980"
+    write /sys/devices/platform/soc/soc:qcom,cpu-llcc-ddr-bw/devfreq/soc:qcom,cpu-llcc-ddr-bw/bw_hwmon/sample_ms 4
+    write /sys/devices/platform/soc/soc:qcom,cpu-llcc-ddr-bw/devfreq/soc:qcom,cpu-llcc-ddr-bw/bw_hwmon/io_percent 80
+    write /sys/devices/platform/soc/soc:qcom,cpu-llcc-ddr-bw/devfreq/soc:qcom,cpu-llcc-ddr-bw/bw_hwmon/hist_memory 20
+    write /sys/devices/platform/soc/soc:qcom,cpu-llcc-ddr-bw/devfreq/soc:qcom,cpu-llcc-ddr-bw/bw_hwmon/hyst_length 10
+    write /sys/devices/platform/soc/soc:qcom,cpu-llcc-ddr-bw/devfreq/soc:qcom,cpu-llcc-ddr-bw/bw_hwmon/down_thres 30
+    write /sys/devices/platform/soc/soc:qcom,cpu-llcc-ddr-bw/devfreq/soc:qcom,cpu-llcc-ddr-bw/bw_hwmon/guard_band_mbps 0
+    write /sys/devices/platform/soc/soc:qcom,cpu-llcc-ddr-bw/devfreq/soc:qcom,cpu-llcc-ddr-bw/bw_hwmon/up_scale 250
+    write /sys/devices/platform/soc/soc:qcom,cpu-llcc-ddr-bw/devfreq/soc:qcom,cpu-llcc-ddr-bw/bw_hwmon/idle_mbps 1600
+    write /sys/devices/platform/soc/soc:qcom,cpu-llcc-ddr-bw/devfreq/soc:qcom,cpu-llcc-ddr-bw/max_freq 6881
+    write /sys/devices/platform/soc/soc:qcom,npu-npu-ddr-bw/devfreq/soc:qcom,npu-npu-ddr-bw/governor bw_hwmon
+    write /sys/devices/platform/soc/soc:qcom,npu-npu-ddr-bw/devfreq/soc:qcom,npu-npu-ddr-bw/polling_interval 40
+    write /sys/devices/platform/soc/soc:qcom,npu-npu-ddr-bw/devfreq/soc:qcom,npu-npu-ddr-bw/bw_hwmon/mbps_zones "1720 2929 3879 5931 6881 7980"
+    write /sys/devices/platform/soc/soc:qcom,npu-npu-ddr-bw/devfreq/soc:qcom,npu-npu-ddr-bw/bw_hwmon/sample_ms 4
+    write /sys/devices/platform/soc/soc:qcom,npu-npu-ddr-bw/devfreq/soc:qcom,npu-npu-ddr-bw/bw_hwmon/io_percent 80
+    write /sys/devices/platform/soc/soc:qcom,npu-npu-ddr-bw/devfreq/soc:qcom,npu-npu-ddr-bw/bw_hwmon/hist_memory 20
+    write /sys/devices/platform/soc/soc:qcom,npu-npu-ddr-bw/devfreq/soc:qcom,npu-npu-ddr-bw/bw_hwmon/hyst_length 6
+    write /sys/devices/platform/soc/soc:qcom,npu-npu-ddr-bw/devfreq/soc:qcom,npu-npu-ddr-bw/bw_hwmon/down_thres 30
+    write /sys/devices/platform/soc/soc:qcom,npu-npu-ddr-bw/devfreq/soc:qcom,npu-npu-ddr-bw/bw_hwmon/guard_band_mbps 0
+    write /sys/devices/platform/soc/soc:qcom,npu-npu-ddr-bw/devfreq/soc:qcom,npu-npu-ddr-bw/bw_hwmon/up_scale 250
+    write /sys/devices/platform/soc/soc:qcom,npu-npu-ddr-bw/devfreq/soc:qcom,npu-npu-ddr-bw/bw_hwmon/idle_mbps 0
+    # Enable mem_latency governor for L3, LLCC, and DDR scaling
+    write /sys/devices/platform/soc/soc:qcom,cpu0-cpu-llcc-lat/devfreq/soc:qcom,cpu0-cpu-llcc-lat/governor mem_latency
+    write /sys/devices/platform/soc/soc:qcom,cpu0-cpu-llcc-lat/devfreq/soc:qcom,cpu0-cpu-llcc-lat/polling_interval 10
+    write /sys/devices/platform/soc/soc:qcom,cpu0-cpu-llcc-lat/devfreq/soc:qcom,cpu0-cpu-llcc-lat/mem_latency/ratio_ceil 400
+    write /sys/devices/platform/soc/soc:qcom,cpu0-cpu-l3-lat/devfreq/soc:qcom,cpu0-cpu-l3-lat/governor mem_latency
+    write /sys/devices/platform/soc/soc:qcom,cpu0-cpu-l3-lat/devfreq/soc:qcom,cpu0-cpu-l3-lat/polling_interval 10
+    write /sys/devices/platform/soc/soc:qcom,cpu0-cpu-l3-lat/devfreq/soc:qcom,cpu0-cpu-l3-lat/mem_latency/ratio_ceil 400
+    write /sys/devices/platform/soc/soc:qcom,cpu0-llcc-ddr-lat/devfreq/soc:qcom,cpu0-llcc-ddr-lat/governor mem_latency
+    write /sys/devices/platform/soc/soc:qcom,cpu0-llcc-ddr-lat/devfreq/soc:qcom,cpu0-llcc-ddr-lat/polling_interval 10
+    write /sys/devices/platform/soc/soc:qcom,cpu0-llcc-ddr-lat/devfreq/soc:qcom,cpu0-llcc-ddr-lat/mem_latency/ratio_ceil 400
+    write /sys/devices/platform/soc/soc:qcom,cpu4-cpu-llcc-lat/devfreq/soc:qcom,cpu4-cpu-llcc-lat/governor mem_latency
+    write /sys/devices/platform/soc/soc:qcom,cpu4-cpu-llcc-lat/devfreq/soc:qcom,cpu4-cpu-llcc-lat/polling_interval 10
+    write /sys/devices/platform/soc/soc:qcom,cpu4-cpu-llcc-lat/devfreq/soc:qcom,cpu4-cpu-llcc-lat/mem_latency/ratio_ceil 400
+    write /sys/devices/platform/soc/soc:qcom,cpu4-cpu-l3-lat/devfreq/soc:qcom,cpu4-cpu-l3-lat/governor mem_latency
+    write /sys/devices/platform/soc/soc:qcom,cpu4-cpu-l3-lat/devfreq/soc:qcom,cpu4-cpu-l3-lat/polling_interval 10
+    # Gold L3 ratio ceil is 4000
+    write /sys/devices/platform/soc/soc:qcom,cpu4-cpu-l3-lat/devfreq/soc:qcom,cpu4-cpu-l3-lat/mem_latency/ratio_ceil 4000
+    write /sys/devices/platform/soc/soc:qcom,cpu7-cpu-l3-lat/devfreq/soc:qcom,cpu7-cpu-l3-lat/governor mem_latency
+    write /sys/devices/platform/soc/soc:qcom,cpu7-cpu-l3-lat/devfreq/soc:qcom,cpu7-cpu-l3-lat/polling_interval 10
+    # Gold+ L3 ratio ceil is 20000
+    write /sys/devices/platform/soc/soc:qcom,cpu7-cpu-l3-lat/devfreq/soc:qcom,cpu7-cpu-l3-lat/mem_latency/ratio_ceil 20000
+    write /sys/devices/platform/soc/soc:qcom,cpu4-llcc-ddr-lat/devfreq/soc:qcom,cpu4-llcc-ddr-lat/governor mem_latency
+    write /sys/devices/platform/soc/soc:qcom,cpu4-llcc-ddr-lat/devfreq/soc:qcom,cpu4-llcc-ddr-lat/polling_interval 10
+    write /sys/devices/platform/soc/soc:qcom,cpu4-llcc-ddr-lat/devfreq/soc:qcom,cpu4-llcc-ddr-lat/mem_latency/ratio_ceil 400
+    # Enable userspace governor for L3 cdsp nodes
+    write /sys/devices/platform/soc/soc:qcom,cdsp-cdsp-l3-lat/devfreq/soc:qcom,cdsp-cdsp-l3-lat/governor cdspl3
+    # Enable compute governor for gold latfloor
+    write /sys/devices/platform/soc/soc:qcom,cpu4-cpu-ddr-latfloor/devfreq/soc:qcom,cpu4-cpu-ddr-latfloor/governor compute
+    write /sys/devices/platform/soc/soc:qcom,cpu4-cpu-ddr-latfloor/devfreq/soc:qcom,cpu4-cpu-ddr-latfloor/polling_interval 10
+    # Enable powersaving
+    write /sys/module/lpm_levels/parameters/sleep_disabled 0
+    # Enable idle state listener
+    write /sys/class/drm/card0/device/idle_encoder_mask 1
+    write /sys/class/drm/card0/device/idle_timeout_ms 100
+    chown system system /sys/class/devfreq/soc:qcom,l3-cdsp/userspace/set_freq
+    # IRQ Tuning
+    # IRQ 8: msm_drm
+    # IRQ 515: kgsl-3d0
+    write /proc/irq/8/smp_affinity_list 2
+    write /proc/irq/515/smp_affinity_list 1
+
+    # Suspend to idle, as stock
+    write /sys/power/mem_sleep s2idle

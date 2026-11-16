@@ -1,0 +1,17 @@
+diff --git a/service/java/com/android/server/wifi/WifiStateMachine.java b/service/java/com/android/server/wifi/WifiStateMachine.java
+index 38d0ac8..137a115 100644
+--- a/service/java/com/android/server/wifi/WifiStateMachine.java
++++ b/service/java/com/android/server/wifi/WifiStateMachine.java
+@@ -5679,6 +5679,12 @@ public class WifiStateMachine extends StateMachine implements WifiNative.WifiPno
+         @Override
+         protected void needNetworkFor(NetworkRequest networkRequest, int score) {
+             ++mConnectionRequests;
++            // At boot the first scan can complete before ConnectivityService files its
++            // default request (the factory registers on CMD_BOOT_COMPLETED), in which case
++            // autojoin skips it and nothing rescans. Scan again once there is a request.
++            if (mConnectionRequests == 1 && getCurrentState() == mDisconnectedState) {
++                startScan(UNKNOWN_SCAN_SOURCE, 0, null, null);
++            }
+         }
+ 
+         @Override

@@ -1,0 +1,16 @@
+diff --git a/core/jni/android_view_DisplayListCanvas.cpp b/core/jni/android_view_DisplayListCanvas.cpp
+index ef1e4abd..0d450fd7 100644
+--- a/core/jni/android_view_DisplayListCanvas.cpp
++++ b/core/jni/android_view_DisplayListCanvas.cpp
+@@ -222,6 +222,11 @@ static void android_view_DisplayListCanvas_drawLayer(JNIEnv* env, jobject clazz,
+ 
+ static jboolean android_view_DisplayListCanvas_isAvailable(JNIEnv* env, jobject clazz) {
+     char prop[PROPERTY_VALUE_MAX];
++    // Devices without a usable GLES2 driver (e.g. software libagl only) can
++    // force the whole view system onto the software (Skia raster) path.
++    if (property_get_bool("ro.config.disable_hwui", false)) {
++        return JNI_FALSE;
++    }
+     if (property_get("ro.kernel.qemu", prop, NULL) == 0) {
+         // not in the emulator
+         return JNI_TRUE;

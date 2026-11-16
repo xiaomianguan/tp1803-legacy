@@ -1,0 +1,68 @@
+diff --git a/tqftpserv.c b/tqftpserv.c
+index a21778f..f7d838f 100644
+--- a/tqftpserv.c
++++ b/tqftpserv.c
+@@ -1015,8 +1015,22 @@ int main(int argc, char **argv)
+ 			len = recvfrom(fd, buf, sizeof(buf) - 1, 0, (void *)&sq, &sl);
+ 			if (len < 0) {
+ 				ret = -errno;
+-				if (ret != -ENETRESET)
+-					fprintf(stderr, "recvfrom failed on control socket: %d\n", ret);
++				if (ret == -ENETRESET) {
++					/*
++					 * The local node id changed (qrtr-ns came up after
++					 * us). Re-open and re-publish instead of exiting:
++					 * a gap here makes the modem's wlan_pd give up.
++					 */
++					fprintf(stderr, "control socket reset, re-publishing\n");
++					close(fd);
++					fd = qrtr_open(0);
++					if (fd < 0 || qrtr_publish(fd, 4096, 1, 0) < 0) {
++						fprintf(stderr, "failed to re-publish\n");
++						exit(1);
++					}
++					continue;
++				}
++				fprintf(stderr, "recvfrom failed on control socket: %d\n", ret);
+ 				return ret;
+ 			}
+ 
+diff --git a/translate.c b/translate.c
+index 19fdd48..3ab240d 100644
+--- a/translate.c
++++ b/translate.c
+@@ -66,7 +66,7 @@ static void read_fw_path_from_sysfs(char *outbuffer, size_t bufsize)
+  *
+  * Return: opened fd on success, -1 otherwise
+  */
+-static int translate_readonly(const char *file)
++static int translate_readonly_rproc(const char *file)
+ {
+ 	char firmware_value[PATH_MAX];
+ 	char *firmware_value_copy = NULL;
+@@ -168,6 +168,25 @@ static int translate_readonly(const char *file)
+ 	return fd;
+ }
+ 
++/* Downstream (PIL) Qualcomm kernels have no remoteproc class: look in the
++ * firmware partition mount and vendor firmware directly first. */
++static int translate_readonly(const char *file)
++{
++	static const char *const dirs[] = { "/firmware/image/", "/vendor/firmware/", "/firmware/", NULL };
++	char path[PATH_MAX];
++	int d, fd;
++
++	for (d = 0; dirs[d]; d++) {
++		if (strlen(dirs[d]) + strlen(file) + 1 > sizeof(path))
++			continue;
++		snprintf(path, sizeof(path), "%s%s", dirs[d], file);
++		fd = open(path, O_RDONLY);
++		if (fd >= 0)
++			return fd;
++	}
++	return translate_readonly_rproc(file);
++}
++
+ /**
+  * translate_readwrite() - open "file" from the persistent readwrite directory
+  * @file:	relative path of the requested file, with /readwrite/ stripped

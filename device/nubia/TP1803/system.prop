@@ -1,0 +1,4 @@
+# TP1803 system properties
+dalvik.vm.heapgrowthlimit=256m
+ro.config.low_ram=false
+wifi.interface=wlan0
