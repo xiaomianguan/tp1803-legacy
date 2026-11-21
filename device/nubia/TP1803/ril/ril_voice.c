@@ -101,8 +101,14 @@ static void parse_calls(const uint8_t *t, size_t tl, uint8_t tlv_info, uint8_t t
     }
 }
 
-static RIL_CallState ril_call_state(int s)
+static RIL_CallState ril_call_state(int s, int direction, int others_active)
 {
+    /* An MT call is first reported in SETUP (or CC_IN_PROGRESS) before
+     * INCOMING. Reporting that as DIALING makes the framework see a
+     * "phantom" call, which Telecom adds as an unknown call: the in-call
+     * UI then shows no answer/decline buttons. */
+    if (direction == 2 && (s == QS_SETUP || s == QS_CC_IN_PROGRESS || s == QS_ORIGINATING))
+        return others_active ? RIL_CALL_WAITING : RIL_CALL_INCOMING;
     switch (s) {
     case QS_CONVERSATION: return RIL_CALL_ACTIVE;
     case QS_HOLD:         return RIL_CALL_HOLDING;
@@ -122,7 +128,8 @@ static void voice_ind(struct qmi_client *c, uint16_t id, const uint8_t *t, size_
     parse_calls(t, tl, 0x01, 0x10, 0x20);
     int ringing = 0;
     for (int i = 0; i < ncalls; i++)
-        if (calls[i].state == QS_INCOMING)
+        if (calls[i].state == QS_INCOMING ||
+            (calls[i].direction == 2 && calls[i].state == QS_SETUP))
             ringing = 1;
     pthread_mutex_unlock(&call_lock);
     RIL_onUnsolicitedResponse(RIL_UNSOL_RESPONSE_CALL_STATE_CHANGED, NULL, 0);
@@ -162,7 +169,11 @@ void voice_get_current_calls(RIL_Token t)
         struct call *c = &calls[i];
         RIL_Call *x = &rc[i];
         memset(x, 0, sizeof(*x));
-        x->state = ril_call_state(c->state);
+        int others = 0;
+        for (int k = 0; k < n; k++)
+            if (k != i && (calls[k].state == QS_CONVERSATION || calls[k].state == QS_HOLD))
+                others = 1;
+        x->state = ril_call_state(c->state, c->direction, others);
         x->index = c->id;
         x->toa = c->number[0] == '+' ? 145 : 129;
         x->isMpty = c->multiparty;
