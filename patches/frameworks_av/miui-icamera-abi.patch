@@ -1,0 +1,87 @@
+diff --git a/include/camera/ICamera.h b/include/camera/ICamera.h
+index b025735..56e869f 100644
+--- a/include/camera/ICamera.h
++++ b/include/camera/ICamera.h
+@@ -106,6 +106,14 @@ public:
+     // get preview/capture parameters - key/value pairs
+     virtual String8         getParameters() const = 0;
+ 
++#ifdef MIUI_ICAMERA_ABI
++    // MIUI 7 (Android 6.0.0) inserts two calls here: binder codes 12/13,
++    // shifting every later ICamera transaction by two. Only the
++    // libcameraservice_miui variant is built with this layout.
++    virtual int             getFlashOn() = 0;
++    virtual int             getFocusState() = 0;
++#endif
++
+     // send command to camera driver
+     virtual status_t        sendCommand(int32_t cmd, int32_t arg1, int32_t arg2) = 0;
+ 
+diff --git a/services/camera/libcameraservice/Android.mk b/services/camera/libcameraservice/Android.mk
+index 45900c4..2f5b521 100644
+--- a/services/camera/libcameraservice/Android.mk
++++ b/services/camera/libcameraservice/Android.mk
+@@ -18,7 +18,7 @@ LOCAL_PATH:= $(call my-dir)
+ # libcameraservice
+ #
+ 
+-include $(CLEAR_VARS)
++define libcameraservice_common
+ 
+ LOCAL_SRC_FILES:=               \
+     CameraService.cpp \
+@@ -79,6 +79,22 @@ LOCAL_C_INCLUDES += \
+ 
+ LOCAL_CFLAGS += -Wall -Wextra
+ 
++endef
++
++include $(CLEAR_VARS)
++$(eval $(libcameraservice_common))
+ LOCAL_MODULE:= libcameraservice
++include $(BUILD_SHARED_LIBRARY)
+ 
++#
++# libcameraservice_miui: same sources, built for MIUI 7's ICamera layout
++# (shipped as /system/lib64/libcameraservice.so by scripts/miui/port.py)
++#
++include $(CLEAR_VARS)
++$(eval $(libcameraservice_common))
++LOCAL_MODULE := libcameraservice_miui
++LOCAL_CFLAGS += -DMIUI_ICAMERA_ABI
++LOCAL_MULTILIB := 64
++LOCAL_MODULE_TAGS := optional
+ include $(BUILD_SHARED_LIBRARY)
++
+diff --git a/services/camera/libcameraservice/CameraService.cpp b/services/camera/libcameraservice/CameraService.cpp
+index 7c4594f..4f7197b 100644
+--- a/services/camera/libcameraservice/CameraService.cpp
++++ b/services/camera/libcameraservice/CameraService.cpp
+@@ -2544,6 +2544,11 @@ void CameraService::updateStatus(ICameraServiceListener::Status status, const St
+ 
+ void CameraService::updateProxyDeviceState(ICameraServiceProxy::CameraState newState,
+         const String8& cameraId) {
++#ifdef MIUI_ICAMERA_ABI
++    // MIUI's 6.0.0 ICameraServiceProxy has no notifyCameraState()
++    (void)newState; (void)cameraId;
++    return;
++#endif
+     sp<ICameraServiceProxy> proxyBinder = getCameraServiceProxy();
+     if (proxyBinder == nullptr) return;
+     String16 id(cameraId);
+diff --git a/services/camera/libcameraservice/CameraService.h b/services/camera/libcameraservice/CameraService.h
+index d2c1bd3..5105426 100644
+--- a/services/camera/libcameraservice/CameraService.h
++++ b/services/camera/libcameraservice/CameraService.h
+@@ -310,6 +310,11 @@ public:
+         virtual status_t      setParameters(const String8& params) = 0;
+         virtual String8       getParameters() const = 0;
+         virtual status_t      sendCommand(int32_t cmd, int32_t arg1, int32_t arg2) = 0;
++#ifdef MIUI_ICAMERA_ABI
++        // MIUI's extra ICamera calls: flash off, focus state unknown
++        virtual int           getFlashOn() { return 0; }
++        virtual int           getFocusState() { return 0; }
++#endif
+ 
+         // Interface used by CameraService
+         Client(const sp<CameraService>& cameraService,

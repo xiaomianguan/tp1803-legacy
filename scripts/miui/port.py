@@ -155,6 +155,91 @@ for va, old, new in SF_PATCHES:
     struct.pack_into("<I", sf, va - SF_BASE, new)
 open(os.path.join(work, "libsurfaceflinger.so"), "wb").write(sf)
 payload["lib64/libsurfaceflinger.so"] = os.path.join(work, "libsurfaceflinger.so")
+
+def put_bytes(rel, data):
+    """Payload entry generated here (written to the work dir)."""
+    p = os.path.join(work, "gen", rel)
+    os.makedirs(os.path.dirname(p), exist_ok=True)
+    open(p, "wb").write(data)
+    payload[rel] = p
+
+# 5. WebView 106 (our com.android.webview) instead of MIUI's Google WebView
+#    46. MIUI's framework-res names com.google.android.webview as the provider
+#    and its resource loader can't take a runtime overlay, so the string is
+#    patched in resources.arsc (M verifies only the manifest of system APKs,
+#    so Xiaomi's platform signature stays valid).
+fr_in = os.path.join(work, "framework-res.miui.apk")
+fr_out = os.path.join(work, "framework-res.unaligned.apk")
+open(fr_in, "wb").write(miui_cat("/framework/framework-res.apk"))
+run(sys.executable, "-I", os.path.join(os.path.dirname(os.path.abspath(__file__)), "arsc_patch.py"),
+    fr_in, fr_out, "com.google.android.webview=com.android.webview")
+run(os.path.join(aospa, "out/host/linux-x86/bin/zipalign"), "-f", "4", fr_out,
+    os.path.join(work, "framework-res.apk"))
+payload["framework/framework-res.apk"] = os.path.join(work, "framework-res.apk")
+add("app/webview/webview.apk")
+
+# 6. Root CAs: ours (Mozilla 2022, 243) replace MIUI's 2016 store (158)
+for f in os.listdir(os.path.join(SYS, "etc/security/cacerts")):
+    add("etc/security/cacerts/" + f)
+
+# 7. Camera. CamX is 64-bit only, so CameraService runs in our cameraserver
+#    (init.qcom.rc) as on CM/AOSPA. libcameraservice_miui is our service built
+#    for MIUI 7's ICamera layout (patches/frameworks_av/miui-icamera-abi.patch:
+#    two extra calls, transaction codes 12/13) against MIUI's libcamera_client;
+#    build it with `scripts/build.sh libcameraservice_miui`. MIUI's 32-bit
+#    mediaserver still constructs its own CameraService: its registration
+#    name is renamed so ours owns media.camera.
+cs_miui = os.path.join(SYS, "lib64/libcameraservice_miui.so")
+if not os.path.exists(cs_miui):
+    sys.exit("missing %s: run scripts/build.sh libcameraservice_miui" % cs_miui)
+payload["lib64/libcameraservice.so"] = cs_miui
+for f in ("bin/cameraserver", "lib64/libmediautils.so",
+          # Q camera metadata (CamX tags), both ABIs as on CM
+          "lib64/libcamera_metadata.so", "lib/libcamera_metadata.so",
+          # recording: our CameraSource/StagefrightRecorder take the frames
+          # cameraserver sends over a dma-buf fd (patches/frameworks_av);
+          # MIUI's pair assumes an in-process camera and crashes mediaserver
+          "lib/libstagefright.so", "lib/libmediaplayerservice.so"):
+    add(f)
+ms = bytearray(miui_cat("/bin/mediaserver"))
+if ms.count(b"media.camera\0") != 1:
+    sys.exit("mediaserver: media.camera string not found exactly once")
+i = ms.index(b"media.camera\0")
+ms[i:i + 13] = b"media.cam_mi\0"
+put_bytes("bin/mediaserver", bytes(ms))
+
+# 8. Codecs: our media_codecs.xml includes media_codecs_ffmpeg.xml, and a
+#    missing include makes MediaCodecList drop the whole list (no codecs at
+#    all: no UI sounds, no recording). List MIUI's own FFmpeg decoders there.
+put_bytes("etc/media_codecs_ffmpeg.xml", b"""<?xml version="1.0" encoding="utf-8" ?>
+<!-- MIUI's FFmpeg OMX decoders (libstagefright_soft_ffmpegadec), included by
+     our media_codecs.xml (a missing include empties the whole codec list) -->
+<Included>
+    <Decoders>
+        <MediaCodec name="OMX.ffmpeg.dsd.decoder" type="audio/dsd" />
+        <MediaCodec name="OMX.ffmpeg.adpcm.decoder" type="audio/32KADPCM" />
+    </Decoders>
+</Included>
+""")
+
+# 9. MIUI device features (gemini.xml, kept as ro.product.device=gemini):
+#    describe the TP1803 instead of the Mi 5. vendor!=qcom makes MIUI Camera
+#    use its generic API1 path: its Qualcomm path expects the Mi 5's HAL1
+#    vendor parameters (max-saturation...) that a HAL3 camera doesn't have.
+feat = miui_cat("/etc/device_features/gemini.xml").decode()
+FEATURES = {
+    "vendor": "nubia",                       # string
+    "support_ir": "false", "support_hall_sensor": "false",
+    "support_led_light": "false", "support_button_light": "false",
+    "support_fm": "false", "support_small_win_cover": "false",
+    "front_fingerprint_sensor": "false",
+    "support_tap_fingerprint_sensor_to_home": "false",
+}
+for k, v in FEATURES.items():
+    feat, n = re.subn(r'(<(bool|string) name="%s">)[^<]*(</\2>)' % k, r"\g<1>%s\3" % v, feat)
+    if n != 1:
+        sys.exit("gemini.xml: feature %s found %d times" % (k, n))
+put_bytes("etc/device_features/gemini.xml", feat.encode())
 print("payload: %d files" % len(payload))
 
 # ---------------------------------------------------------------- removals
@@ -177,10 +262,27 @@ for f in ("android.hardware.consumerir.xml", "android.hardware.sensor.barometer.
     removals.append("etc/permissions/" + f)
 # MIUI's flash_recovery would rewrite our recovery partition from boot
 removals += ["recovery-from-boot.p", "bin/install-recovery.sh"]
+# NFC: the TP1803's NFC controller doesn't answer ("NFCC HW not available")
+for f in ("android.hardware.nfc.xml", "android.hardware.nfc.hce.xml", "com.android.nfc_extras.xml"):
+    removals.append("etc/permissions/" + f)
+# Mi 5 Qualcomm clients that misbehave here:
+#  - power.qcom (ro.hardware=qcom picks it first) drives the Mi 5's perfd;
+#    power.default takes over
+#  - libqti-perfd-client: CamX's CHI dlopens it and calls a NULL entry
+#    (cameraserver SIGSEGV); without it CHI just skips perf locks
+#  - libavenhancements: MIUI's AV extensions, built against MIUI's
+#    libstagefright (which ours replaces)
+removals += ["lib/hw/power.qcom.so", "lib64/hw/power.qcom.so",
+             "vendor/lib/libqti-perfd-client.so", "vendor/lib64/libqti-perfd-client.so",
+             "vendor/lib/libavenhancements.so"]
+# CA store: drop MIUI certificates that aren't in ours
+ours_ca = set(os.listdir(os.path.join(SYS, "etc/security/cacerts")))
+removals += ["etc/security/cacerts/" + f for f in miui_ls("/etc/security/cacerts") if f not in ours_ca]
 # Mi 5 apps that hang without their Qualcomm daemons. com.qualcomm.location
 # (IZat, persistent, system uid) blocks on its location service -> ANR in
-# the system process.
-REMOVE_DIRS = ["priv-app/com.qualcomm.location"]
+# the system process. WebViewGoogle: replaced by our WebView 106. NFC apps:
+# no NFC hardware.
+REMOVE_DIRS = ["priv-app/com.qualcomm.location", "app/WebViewGoogle", "app/NfcNci", "app/NFCtestSvc"]
 print("removals: %d" % len(removals))
 
 # ---------------------------------------------------------------- build.prop

@@ -18,6 +18,7 @@ mkdir -p "$WORK" "$(dirname "$OUT")"
     lunch pa_TP1803-userdebug >/dev/null 2>&1 &&
     echo "$(get_build_var PRODUCT_COPY_FILES)" > /src/out/miui-copyfiles.txt &&
     echo "$(get_build_var PRODUCT_PROPERTY_OVERRIDES)" > /src/out/miui-props.txt')
+
 python3 -I "$ROOT/scripts/miui/port.py" "$MIUI_ZIP" "$TP_SRC" "$WORK" \
     "$TP_SRC/out/miui-copyfiles.txt" "$TP_SRC/out/miui-props.txt"
 
