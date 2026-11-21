@@ -339,3 +339,17 @@ on property:sys.boot_completed=1
 
     # Suspend to idle, as stock
     write /sys/power/mem_sleep s2idle
+
+# Dual-SIM frameworks (MIUI: persist.radio.multisim.config=dsds) activate no
+# subscription until every slot reports its card. The TP1803 has one slot:
+# a second libril-tp1803 instance (-c 2) reports slot 2 as empty.
+service ril-daemon2 /system/bin/rild -c 2
+    class main
+    socket rild2 stream 660 root radio
+    socket rild-debug2 stream 660 radio system
+    user root
+    group radio cache inet misc audio log
+    disabled
+
+on property:persist.radio.multisim.config=dsds
+    start ril-daemon2

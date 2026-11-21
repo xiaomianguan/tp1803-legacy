@@ -722,10 +722,124 @@ again:
     return NULL;
 }
 
+/* ------------------------------------------------------- empty SIM slot
+ * The TP1803 has one SIM slot, but a dual-SIM framework (MIUI runs
+ * persist.radio.multisim.config=dsds) won't activate any subscription until
+ * EVERY slot has reported its card, so slot 2 needs a RIL that says "no card".
+ * `rild -c 2` (init.qcom.rc ril-daemon2) loads this library in that mode: it
+ * never touches QMI, follows radio power, and answers the framework's polls
+ * with "not registered". */
+static void stub_request(int request, void *data, size_t datalen, RIL_Token t)
+{
+    (void)datalen;
+    switch (request) {
+    case RIL_REQUEST_GET_SIM_STATUS: {
+        static RIL_CardStatus_v6 cs;
+        memset(&cs, 0, sizeof(cs));
+        cs.card_state = RIL_CARDSTATE_ABSENT;
+        cs.universal_pin_state = RIL_PINSTATE_UNKNOWN;
+        cs.gsm_umts_subscription_app_index = -1;
+        cs.cdma_subscription_app_index = -1;
+        cs.ims_subscription_app_index = -1;
+        cs.num_applications = 0;
+        RIL_onRequestComplete(t, RIL_E_SUCCESS, &cs, sizeof(cs));
+        return;
+    }
+    case RIL_REQUEST_RADIO_POWER:
+        set_radio_state(data && ((int *)data)[0] ? RADIO_STATE_ON : RADIO_STATE_OFF);
+        ok(t);
+        return;
+    case RIL_REQUEST_SHUTDOWN:
+        set_radio_state(RADIO_STATE_OFF);
+        ok(t);
+        return;
+    case RIL_REQUEST_VOICE_REGISTRATION_STATE:
+    case RIL_REQUEST_DATA_REGISTRATION_STATE: {
+        static char reg[] = "0", tech[] = "0";
+        static char *resp[15];
+        memset(resp, 0, sizeof(resp));
+        resp[0] = reg;
+        resp[3] = tech;
+        RIL_onRequestComplete(t, RIL_E_SUCCESS, resp,
+            (request == RIL_REQUEST_VOICE_REGISTRATION_STATE ? 15 : 6) * sizeof(char *));
+        return;
+    }
+    case RIL_REQUEST_OPERATOR: {
+        static char *resp[3];
+        RIL_onRequestComplete(t, RIL_E_SUCCESS, resp, sizeof(resp));
+        return;
+    }
+    case RIL_REQUEST_SIGNAL_STRENGTH: {
+        static RIL_SignalStrength_v10 ss;
+        memset(&ss, 0, sizeof(ss));
+        ss.GW_SignalStrength.signalStrength = 99;
+        ss.GW_SignalStrength.bitErrorRate = -1;
+        ss.CDMA_SignalStrength.dbm = -1;
+        ss.CDMA_SignalStrength.ecio = -1;
+        ss.EVDO_SignalStrength.dbm = -1;
+        ss.EVDO_SignalStrength.ecio = -1;
+        ss.EVDO_SignalStrength.signalNoiseRatio = -1;
+        ss.LTE_SignalStrength.signalStrength = 99;
+        ss.LTE_SignalStrength.rsrp = INT_MAX;
+        ss.LTE_SignalStrength.rsrq = INT_MAX;
+        ss.LTE_SignalStrength.rssnr = INT_MAX;
+        ss.LTE_SignalStrength.cqi = INT_MAX;
+        ss.LTE_SignalStrength.timingAdvance = INT_MAX;
+        ss.TD_SCDMA_SignalStrength.rscp = INT_MAX;
+        RIL_onRequestComplete(t, RIL_E_SUCCESS, &ss, sizeof(ss));
+        return;
+    }
+    case RIL_REQUEST_GET_CURRENT_CALLS:
+    case RIL_REQUEST_DATA_CALL_LIST:
+        RIL_onRequestComplete(t, RIL_E_SUCCESS, NULL, 0);
+        return;
+    case RIL_REQUEST_QUERY_NETWORK_SELECTION_MODE: {
+        static int automatic = 0;
+        RIL_onRequestComplete(t, RIL_E_SUCCESS, &automatic, sizeof(automatic));
+        return;
+    }
+    case RIL_REQUEST_GET_PREFERRED_NETWORK_TYPE:
+        RIL_onRequestComplete(t, RIL_E_SUCCESS, &pref_network, sizeof(pref_network));
+        return;
+    case RIL_REQUEST_SET_PREFERRED_NETWORK_TYPE:
+        if (data)
+            pref_network = ((int *)data)[0];
+        ok(t);
+        return;
+    case RIL_REQUEST_SCREEN_STATE:
+    case RIL_REQUEST_SET_INITIAL_ATTACH_APN:
+    case RIL_REQUEST_SET_DATA_PROFILE:
+    case RIL_REQUEST_REPORT_STK_SERVICE_IS_RUNNING:
+    case RIL_REQUEST_ALLOW_DATA:
+    case RIL_REQUEST_SET_UICC_SUBSCRIPTION:
+        ok(t);
+        return;
+    default:
+        RIL_onRequestComplete(t, RIL_E_RADIO_NOT_AVAILABLE, NULL, 0);
+        return;
+    }
+}
+
+static const RIL_RadioFunctions s_stub_callbacks = {
+    RIL_VERSION,
+    stub_request,
+    currentState,
+    onSupports,
+    onCancel,
+    getVersion,
+};
+
 const RIL_RadioFunctions *RIL_Init(const struct RIL_Env *env, int argc, char **argv)
 {
-    (void)argc; (void)argv;
     s_rilenv = env;
+    for (int i = 1; i + 1 < argc; i++) {
+        if (!strcmp(argv[i], "-c") && strcmp(argv[i + 1], "1") && strcmp(argv[i + 1], "0")) {
+            ALOGI("client %s: empty SIM slot", argv[i + 1]);
+            signal(SIGPIPE, SIG_IGN);
+            radio_state = RADIO_STATE_OFF;
+            return &s_stub_callbacks;
+        }
+    }
     qmi_log = log_android;
     /* libril writes to the framework's socket; if the phone process goes
      * away mid-response, that must not kill rild. */
