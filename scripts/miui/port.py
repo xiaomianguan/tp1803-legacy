@@ -240,6 +240,45 @@ for k, v in FEATURES.items():
     if n != 1:
         sys.exit("gemini.xml: feature %s found %d times" % (k, n))
 put_bytes("etc/device_features/gemini.xml", feat.encode())
+
+# 10. GApps variant (port.sh GAPPS=...): OpenGApps 6.0 arm64 nano, the same
+#     package and selection as the CM/AOSPA images (scripts/add-gapps.py),
+#     except: no Google SetupWizard (MIUI's Provision runs first boot; add
+#     the account in Settings), no Google PackageInstaller (MIUI's installer
+#     is tied into its security scan) and no swypelibs (MIUI has no LatinIME).
+GAPPS_PACKAGES = [
+    "configupdater-all/nodpi", "defaultetc-common/common", "defaultframework-common/common",
+    "gmscore-arm64/nodpi", "googlebackuptransport-all/nodpi", "googlecontactssync-all/nodpi",
+    "googlefeedback-all/nodpi", "googleonetimeinitializer-all/nodpi",
+    "googlepartnersetup-all/nodpi", "gsfcore-all/nodpi", "gsflogin-all/nodpi",
+    "vending-arm64/nodpi", "calsync-all/nodpi", "dialerframework-common/common",
+    "googletts-arm64/nodpi", "search-arm64/nodpi", "speech-common/common",
+]
+gapps_dir = os.environ.get("MIUI_GAPPS")
+if gapps_dir:
+    _ls = {}
+    def miui_exists(rel):
+        parent, name = os.path.split(rel)
+        if parent not in _ls:
+            _ls[parent] = set(miui_ls("/" + parent))
+        return name in _ls[parent]
+    added = 0
+    for pkg in GAPPS_PACKAGES:
+        root = os.path.join(gapps_dir, "tars", pkg)
+        if not os.path.isdir(root):
+            sys.exit("gapps: missing package %s" % pkg)
+        for d, _, names in os.walk(root):
+            for n in names:
+                rel = os.path.relpath(os.path.join(d, n), root)
+                if miui_exists(rel):
+                    # MIUI already ships it (com.google.android.maps): keep
+                    # MIUI's copy, which the rest of the ROM was built with
+                    print("gapps: keeping MIUI's %s" % rel)
+                    continue
+                payload[rel] = os.path.join(d, n)
+                added += 1
+    payload["etc/g.prop"] = os.path.join(gapps_dir, "pkg", "g.prop")
+    print("gapps: %d files from %d packages" % (added + 1, len(GAPPS_PACKAGES)))
 print("payload: %d files" % len(payload))
 
 # ---------------------------------------------------------------- removals

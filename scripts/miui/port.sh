@@ -19,6 +19,20 @@ mkdir -p "$WORK" "$(dirname "$OUT")"
     echo "$(get_build_var PRODUCT_COPY_FILES)" > /src/out/miui-copyfiles.txt &&
     echo "$(get_build_var PRODUCT_PROPERTY_OVERRIDES)" > /src/out/miui-props.txt')
 
+# Optional GApps variant: GAPPS=<open_gapps-arm64-6.0-nano-*.zip> (the same
+# package as the CM/AOSPA images) -> miui-<ver>-TP1803-gapps.zip
+unset MIUI_GAPPS
+if [ -n "${GAPPS:-}" ]; then
+    case "${2:-}" in "") OUT="$TP_SRC/out/dist-tp1803/miui-$VER-TP1803-gapps.zip";; esac
+    G=$TP_SRC/out/miui-gapps
+    gclean() { (cd "$HOME/cm13-build" && ./enter.sh bash -c "chmod -R u+w /src/out/miui-gapps 2>/dev/null; rm -rf /src/out/miui-gapps"); }
+    gclean   # tarballs extract read-only dirs: remove from inside the chroot
+    mkdir -p "$G/pkg" "$G/tars"
+    unzip -q "$GAPPS" -d "$G/pkg"
+    (cd "$HOME/cm13-build" && ./enter.sh bash -c 'cd /src/out/miui-gapps && for f in pkg/Core/*.tar* pkg/GApps/*.tar* pkg/Optional/*.tar*; do
+        case $f in *.lz) lzip -dc "$f" | tar -x -C tars;; *) tar -x -C tars -f "$f";; esac; done')
+    export MIUI_GAPPS=$G
+fi
 python3 -I "$ROOT/scripts/miui/port.py" "$MIUI_ZIP" "$TP_SRC" "$WORK" \
     "$TP_SRC/out/miui-copyfiles.txt" "$TP_SRC/out/miui-props.txt"
 
@@ -67,3 +81,4 @@ mv "$WORK/unsigned.zip" "$TP_SRC/out/miui-unsigned.zip"
 mv "$TP_SRC/out/miui-signed.zip" "$OUT"
 rm -f "$TP_SRC/out/miui-unsigned.zip"
 ls -la "$OUT"; md5sum "$OUT"
+[ -n "${MIUI_GAPPS:-}" ] && gclean || true
