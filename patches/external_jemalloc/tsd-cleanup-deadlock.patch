@@ -1,0 +1,39 @@
+diff --git a/include/jemalloc/internal/tsd.h b/include/jemalloc/internal/tsd.h
+index bf11341..a81a4e8 100644
+--- a/include/jemalloc/internal/tsd.h
++++ b/include/jemalloc/internal/tsd.h
+@@ -425,18 +425,26 @@ a_name##tsd_cleanup_wrapper(void *arg)					\
+ 	if (a_cleanup != malloc_tsd_no_cleanup &&			\
+ 	    wrapper->initialized) {					\
+ 		wrapper->initialized = false;				\
++		/*							\
++		 * pthread cleared our slot before calling us. Keep the	\
++		 * wrapper reachable while cleaning up: a tsd_fetch()	\
++		 * from inside a_cleanup (e.g. chunk hooks during an	\
++		 * arena purge) would otherwise a0malloc() a new	\
++		 * wrapper while holding that arena's lock -> deadlock.	\
++		 */							\
++		if (pthread_setspecific(a_name##tsd_tsd,		\
++		    (void *)wrapper)) {					\
++			malloc_write("<jemalloc>: Error"		\
++			    " setting TSD for "#a_name"\n");		\
++			if (opt_abort)					\
++				abort();				\
++		}							\
+ 		a_cleanup(&wrapper->val);				\
+ 		if (wrapper->initialized) {				\
+-			/* Trigger another cleanup round. */		\
+-			if (pthread_setspecific(a_name##tsd_tsd,	\
+-			    (void *)wrapper)) {				\
+-				malloc_write("<jemalloc>: Error"	\
+-				    " setting TSD for "#a_name"\n");	\
+-				if (opt_abort)				\
+-					abort();			\
+-			}						\
++			/* Trigger another cleanup round (slot set). */	\
+ 			return;						\
+ 		}							\
++		pthread_setspecific(a_name##tsd_tsd, NULL);		\
+ 	}								\
+ 	malloc_tsd_dalloc(wrapper);					\
+ }									\

@@ -145,6 +145,7 @@ use `git apply`:
 | `patches/hardware_libhardware_legacy` | `src/hardware/libhardware_legacy` |
 | `patches/libcore` | `src/libcore` |
 | `patches/build` | `src/build` |
+| `patches/external_jemalloc` | `src/external/jemalloc` |
 | `patches/frameworks_native` | `src/frameworks/native` |
 | `patches/vendor_pa` | `src/vendor/pa` |
 | `patches/system_core` | `src/system/core` |
@@ -156,7 +157,8 @@ use `git apply`:
 
 ```sh
 S=~/aospa-build/src; P="$PWD/patches"
-for pair in bionic:bionic build:build frameworks_base:frameworks/base \
+for pair in bionic:bionic build:build external_jemalloc:external/jemalloc \
+    frameworks_base:frameworks/base \
     frameworks_native:frameworks/native frameworks_opt_net_wifi:frameworks/opt/net/wifi \
     hardware_libhardware_legacy:hardware/libhardware_legacy libcore:libcore \
     system_core:system/core system_media:system/media system_netd:system/netd \
