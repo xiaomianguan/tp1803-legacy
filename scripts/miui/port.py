@@ -114,8 +114,17 @@ for arch in ("lib", "lib64"):
     for f in ("libc.so", "libm.so", "libdl.so", "libutils.so", "libcutils.so", "libsync.so",
               "libaudioroute.so", "libhardware_legacy.so"):
         add("%s/%s" % (arch, f))
-for f in ("bin/linker", "bin/linker64", "bin/wpa_supplicant"):
+# netd: ours uses the upstream FRA_UID_RANGE rule attribute (patches/system_netd);
+# MIUI's sends FRA_UID_START/END, which 4.14 rejects -> no per-network routing
+# rules, "Network is unreachable" and "No Internet Access" on Wi-Fi.
+for f in ("bin/linker", "bin/linker64", "bin/wpa_supplicant", "bin/netd"):
     add(f)
+# The WLAN driver requests wlan/qca_cld/WCNSS_qcom_cfg.ini and the firmware
+# loader finds MIUI's /system/etc/firmware/wlan/qca_cld/ symlink (to
+# /system/etc/wifi/WCNSS_qcom_cfg.ini) before our /vendor copy. The Mi 5 ini
+# has gScanAgingTime=0, so every scan result was aged out before a connect
+# could use it (ASSOC-REJECT on every AP). Serve our ini at that path too.
+payload["etc/wifi/WCNSS_qcom_cfg.ini"] = os.path.join(SYS, "vendor/firmware/wlan/qca_cld/WCNSS_qcom_cfg.ini")
 
 # 4. MIUI's own SurfaceFlinger, binary-patched for a phone without a
 #    Qualcomm hwcomposer/gralloc (our display is GLES composition over KMS).
