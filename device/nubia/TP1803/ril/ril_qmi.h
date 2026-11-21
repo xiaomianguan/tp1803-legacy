@@ -19,6 +19,7 @@ int sim_present(void);
 void sim_get_status(RIL_Token t);
 void sim_io(RIL_Token t, RIL_SIM_IO_v6 *io);
 void sim_get_imsi(RIL_Token t);
+int sim_read_iccid(char *out, size_t n);
 void sim_pin_op(RIL_Token t, int request, char **data);
 void sim_query_facility(RIL_Token t, char **data);
 void sim_set_facility(RIL_Token t, char **data);

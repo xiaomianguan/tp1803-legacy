@@ -340,6 +340,11 @@ on property:sys.boot_completed=1
     # Suspend to idle, as stock
     write /sys/power/mem_sleep s2idle
 
+# Qualcomm OEM-hook sockets (/dev/socket/qmux_radio/rild_oem<slot>), served
+# by libril-tp1803 for Qualcomm telephony apps (MIUI's qcrilmsgtunnel)
+on post-fs-data
+    mkdir /dev/socket/qmux_radio 0770 radio radio
+
 # Dual-SIM frameworks (MIUI: persist.radio.multisim.config=dsds) activate no
 # subscription until every slot reports its card. The TP1803 has one slot:
 # a second libril-tp1803 instance (-c 2) reports slot 2 as empty.

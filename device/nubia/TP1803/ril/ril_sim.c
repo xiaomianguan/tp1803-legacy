@@ -392,6 +392,38 @@ void sim_io(RIL_Token t, RIL_SIM_IO_v6 *io)
     }
 }
 
+/* ICCID from EF_ICCID (2FE2 under MF): swapped-nibble BCD, 0xF padded.
+ * Returns 0 and a NUL-terminated digit string on success. */
+int sim_read_iccid(char *out, size_t n)
+{
+    struct qmi_msg q, r;
+    uint16_t e;
+    qmi_msg_init(&q, UIM_READ_TRANSPARENT);
+    add_file_tlvs(&q, 0x2FE2, "3F00");
+    uint8_t rd[4] = { 0, 0, 10, 0 };            /* offset 0, 10 bytes */
+    qmi_tlv_add(&q, 0x03, rd, 4);
+    if (qmi_request(&q_uim, &q, &r, 5000, &e) || e)
+        return -1;
+    size_t tl;
+    const uint8_t *tv = qmi_msg_tlvs(&r, &tl);
+    uint16_t vl;
+    const uint8_t *d = qmi_tlv_find(tv, tl, 0x11, &vl);
+    if (!d || vl < 2)
+        return -1;
+    size_t len = qmi_le16(d), o = 0;
+    for (size_t i = 0; i < len && o + 2 < n; i++) {
+        uint8_t lo = d[2 + i] & 0x0f, hi = d[2 + i] >> 4;
+        if (lo > 9)
+            break;
+        out[o++] = '0' + lo;
+        if (hi > 9)
+            break;
+        out[o++] = '0' + hi;
+    }
+    out[o] = 0;
+    return o ? 0 : -1;
+}
+
 /* IMSI from EF_IMSI (6F07): byte0 = length, then BCD with parity nibble. */
 void sim_get_imsi(RIL_Token t)
 {

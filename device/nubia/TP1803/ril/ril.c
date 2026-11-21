@@ -8,7 +8,12 @@
  */
 #define LOG_TAG "RIL-TP1803"
 
+#include <errno.h>
 #include <limits.h>
+#include <stdint.h>
+#include <sys/socket.h>
+#include <sys/stat.h>
+#include <sys/un.h>
 #include <signal.h>
 #include <stdarg.h>
 #include <stdio.h>
@@ -461,9 +466,156 @@ static void ok(RIL_Token t) { RIL_onRequestComplete(t, RIL_E_SUCCESS, NULL, 0); 
 static void fail(RIL_Token t) { RIL_onRequestComplete(t, RIL_E_GENERIC_FAILURE, NULL, 0); }
 static void unsupported(RIL_Token t) { RIL_onRequestComplete(t, RIL_E_REQUEST_NOT_SUPPORTED, NULL, 0); }
 
+/* ------------------------------------------------------- QCRIL OEM hooks
+ * Qualcomm telephony (MIUI's QtiTelephony/UiccCardProvisioner) asks the RIL
+ * whether each card is "provisioned" through OEM_HOOK_RAW requests:
+ *   "QOEMHOOK" | int32 request id | int32 payload length | payload
+ * Without an answer the SIM stays unprovisioned and MIUI registers no phone
+ * account for it (only "Emergency calls"): no calls, no SMS. They arrive
+ * through libril (RIL_REQUEST_OEM_HOOK_RAW) or, from MIUI's qcrilmsgtunnel,
+ * on /dev/socket/qmux_radio/rild_oem<slot> (served below; on Qualcomm phones
+ * qcril itself owns that socket). */
+#define QCRIL_EVT_HOOK_GET_UICC_PROVISION_PREFERENCE 0x8005A
+#define QCRIL_EVT_HOOK_SET_UICC_PROVISION_PREFERENCE 0x8005B
+#define QCRIL_EVT_HOOK_GET_UICC_ICCID                0x8005C
+#define UICC_PROVISIONED 1
+
+static int s_empty_slot;    /* this instance serves an empty SIM slot */
+
+/* Handle one hook request. Returns a RIL_Errno; on success *out and *outlen
+ * hold the reply payload (static storage). */
+static int oem_hook(const uint8_t *data, size_t len, const void **out, size_t *outlen)
+{
+    static int32_t st[2];
+    static char iccid[32];
+    *out = NULL;
+    *outlen = 0;
+    if (!data || len < 16 || memcmp(data, "QOEMHOOK", 8))
+        return RIL_E_REQUEST_NOT_SUPPORTED;
+    int32_t id, plen;
+    memcpy(&id, data + 8, 4);
+    memcpy(&plen, data + 12, 4);
+    switch (id) {
+    case QCRIL_EVT_HOOK_GET_UICC_PROVISION_PREFERENCE:
+        if (s_empty_slot || !sim_present())
+            return RIL_E_GENERIC_FAILURE;
+        st[0] = st[1] = UICC_PROVISIONED;   /* user preference, current state */
+        *out = st;
+        *outlen = sizeof(st);
+        return RIL_E_SUCCESS;
+    case QCRIL_EVT_HOOK_SET_UICC_PROVISION_PREFERENCE:
+        return s_empty_slot ? RIL_E_GENERIC_FAILURE : RIL_E_SUCCESS;  /* single SIM: always on */
+    case QCRIL_EVT_HOOK_GET_UICC_ICCID:
+        if (s_empty_slot || sim_read_iccid(iccid, sizeof(iccid)))
+            return RIL_E_GENERIC_FAILURE;
+        *out = iccid;
+        *outlen = strlen(iccid);
+        return RIL_E_SUCCESS;
+    default:
+        ALOGI("OEM hook 0x%x (%d bytes) not supported", id, plen);
+        return RIL_E_REQUEST_NOT_SUPPORTED;
+    }
+}
+
+static void oem_hook_raw(RIL_Token t, const uint8_t *data, size_t len)
+{
+    const void *out;
+    size_t outlen;
+    int err = oem_hook(data, len, &out, &outlen);
+    RIL_onRequestComplete(t, err, err ? NULL : (void *)out, err ? 0 : outlen);
+}
+
+/* RILJ-style framing: 4-byte big-endian length, then a Parcel. Request:
+ * int32 request, int32 serial, byte[] (int32 length + data, 4-aligned).
+ * Reply: int32 0 (solicited), int32 serial, int32 error[, byte[] payload]. */
+static int read_full(int fd, void *b, size_t n)
+{
+    for (size_t o = 0; o < n;) {
+        ssize_t r = read(fd, (char *)b + o, n - o);
+        if (r <= 0)
+            return -1;
+        o += r;
+    }
+    return 0;
+}
+
+static void oem_socket_client(int fd)
+{
+    uint8_t hdr[4], req[8192], rsp[8192];
+    for (;;) {
+        if (read_full(fd, hdr, 4))
+            break;
+        uint32_t len = (uint32_t)hdr[0] << 24 | hdr[1] << 16 | hdr[2] << 8 | hdr[3];
+        if (len < 8 || len > sizeof(req) || read_full(fd, req, len))
+            break;
+        int32_t request, serial, blen = 0;
+        memcpy(&request, req, 4);
+        memcpy(&serial, req + 4, 4);
+        if (len >= 12)
+            memcpy(&blen, req + 8, 4);
+        const void *out = NULL;
+        size_t outlen = 0;
+        int err = RIL_E_REQUEST_NOT_SUPPORTED;
+        if (request == RIL_REQUEST_OEM_HOOK_RAW && blen >= 0 && (size_t)blen <= len - 12)
+            err = oem_hook(req + 12, blen, &out, &outlen);
+        int32_t w[4] = { 0, serial, err, (int32_t)outlen };
+        size_t n = 12;
+        memcpy(rsp + 4, w, 12);
+        if (!err) {
+            memcpy(rsp + 4 + n, &w[3], 4);
+            n += 4;
+            if (outlen > sizeof(rsp) - 4 - n - 4)
+                outlen = 0;
+            memcpy(rsp + 4 + n, out, outlen);
+            n += (outlen + 3) & ~3u;
+            memset(rsp + 4 + 16 + outlen, 0, ((outlen + 3) & ~3u) - outlen);
+        }
+        rsp[0] = n >> 24; rsp[1] = n >> 16; rsp[2] = n >> 8; rsp[3] = n;
+        if (write(fd, rsp, 4 + n) != (ssize_t)(4 + n))
+            break;
+    }
+    close(fd);
+}
+
+static void *oem_socket_thread(void *arg)
+{
+    char path[64];
+    snprintf(path, sizeof(path), "/dev/socket/qmux_radio/rild_oem%d", (int)(intptr_t)arg);
+    int s = socket(AF_UNIX, SOCK_STREAM, 0);
+    struct sockaddr_un a;
+    memset(&a, 0, sizeof(a));
+    a.sun_family = AF_UNIX;
+    strncpy(a.sun_path, path, sizeof(a.sun_path) - 1);
+    unlink(path);
+    if (s < 0 || bind(s, (struct sockaddr *)&a, sizeof(a)) || listen(s, 4)) {
+        ALOGE("OEM hook socket %s: %s", path, strerror(errno));
+        if (s >= 0)
+            close(s);
+        return NULL;
+    }
+    chmod(path, 0660);
+    ALOGI("serving OEM hooks on %s", path);
+    for (;;) {
+        int c = accept(s, NULL, NULL);
+        if (c >= 0)
+            oem_socket_client(c);
+    }
+    return NULL;
+}
+
+static void start_oem_socket(int slot)
+{
+    pthread_t th;
+    pthread_create(&th, NULL, oem_socket_thread, (void *)(intptr_t)slot);
+    pthread_detach(th);
+}
+
 static void onRequest(int request, void *data, size_t datalen, RIL_Token t)
 {
-    (void)datalen;
+    if (request == RIL_REQUEST_OEM_HOOK_RAW) {
+        oem_hook_raw(t, data, datalen);
+        return;
+    }
     if (radio_state == RADIO_STATE_UNAVAILABLE &&
         request != RIL_REQUEST_GET_SIM_STATUS) {
         RIL_onRequestComplete(t, RIL_E_RADIO_NOT_AVAILABLE, NULL, 0);
@@ -731,8 +883,10 @@ again:
  * with "not registered". */
 static void stub_request(int request, void *data, size_t datalen, RIL_Token t)
 {
-    (void)datalen;
     switch (request) {
+    case RIL_REQUEST_OEM_HOOK_RAW:
+        oem_hook_raw(t, data, datalen);
+        return;
     case RIL_REQUEST_GET_SIM_STATUS: {
         static RIL_CardStatus_v6 cs;
         memset(&cs, 0, sizeof(cs));
@@ -837,6 +991,8 @@ const RIL_RadioFunctions *RIL_Init(const struct RIL_Env *env, int argc, char **a
             ALOGI("client %s: empty SIM slot", argv[i + 1]);
             signal(SIGPIPE, SIG_IGN);
             radio_state = RADIO_STATE_OFF;
+            s_empty_slot = 1;
+            start_oem_socket(atoi(argv[i + 1]) - 1);
             return &s_stub_callbacks;
         }
     }
@@ -844,6 +1000,7 @@ const RIL_RadioFunctions *RIL_Init(const struct RIL_Env *env, int argc, char **a
     /* libril writes to the framework's socket; if the phone process goes
      * away mid-response, that must not kill rild. */
     signal(SIGPIPE, SIG_IGN);
+    start_oem_socket(0);
     pthread_t th;
     pthread_create(&th, NULL, init_thread, NULL);
     pthread_detach(th);
